@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="logo.svg">
+<title>AhoosAI Studio — Offline</title>
+<style>
+/* ---------------------------------------------------------------------------
+   Themes: two grounds (light, dark) crossed with two accents (blue, purple).
+   Every colour is a token so the cross product needs no duplicated rules --
+   the ground sets the neutrals, the accent overrides three values.
+   --------------------------------------------------------------------------- */
+:root{
+  --bg:#f7f8fa; --panel:#ffffff; --panel-2:#f0f2f6; --line:#dfe3ea;
+  --ink:#1a1d24; --muted:#646b7a; --user-bg:#eef1f7;
+  --code-bg:#f4f6f9; --shadow:0 1px 3px rgba(16,20,30,.07);
+  --accent:#2f6fed; --accent-soft:#e5edfd; --accent-ink:#1d4fb8;
+  --font:"Segoe UI",-apple-system,BlinkMacSystemFont,Roboto,"Noto Sans","Noto Sans Arabic",Arial,sans-serif;
+  --mono:"Cascadia Mono",Consolas,"SF Mono",Menlo,"Liberation Mono",monospace;
+}
+/* True black, not blue-black. The old ground was #0e1116 -- a navy that
+   reads as "dark theme" on an IPS panel and as a smudge on OLED, where black
+   pixels are simply off. Every neutral below is grey with no hue in it, so
+   the accent is the only colour on screen.
+
+   Text is #ededed rather than #ffffff: pure white on pure black overshoots
+   contrast and blooms at small sizes. Lines lift to #262626 because a border
+   that worked against #0e1116 disappears against #000. */
+[data-theme="dark"]{
+  --bg:#000000; --panel:#0b0b0b; --panel-2:#151515; --line:#262626;
+  --ink:#ededed; --muted:#8a8a8a; --user-bg:#141414;
+  --code-bg:#000000; --shadow:0 0 0 1px rgba(255,255,255,.04);
+}
+[data-accent="purple"]{ --accent:#7c5cff; --accent-soft:#ece7ff; --accent-ink:#5b3fd6; }
+[data-theme="dark"][data-accent="blue"]{ --accent:#5b8cff; --accent-soft:#0d1626; --accent-ink:#a8c2ff; }
+[data-theme="dark"][data-accent="purple"]{ --accent:#9b7cff; --accent-soft:#160f26; --accent-ink:#c4b0ff; }
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 var(--font);
+     display:flex;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+
+/* ---- sidebar ------------------------------------------------------------ */
+#side{width:270px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--line);
+      display:flex;flex-direction:column;transition:margin-left .18s ease}
+#side.hidden{margin-left:-270px}
+.side-top{padding:12px;border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:9px;padding:4px 6px 12px;font-weight:640;font-size:15.5px}
+/* Only here. The mark on the empty chat stays clean -- a badge repeated in
+   every empty state reads as decoration rather than as a status. */
+.brand .beta{font-size:9.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;
+             color:var(--accent-ink);background:var(--accent-soft);border-radius:5px;
+             padding:2px 5px;line-height:1;margin-left:-3px;align-self:center}
+.tabs{display:flex;gap:4px;background:var(--panel-2);padding:3px;border-radius:9px}
+.tabs button{flex:1;padding:7px;border-radius:7px;font-size:13px;color:var(--muted);font-weight:560}
+.tabs button.on{background:var(--panel);color:var(--ink);box-shadow:var(--shadow)}
+.pane{flex:1;overflow-y:auto;padding:12px;display:none}
+.pane.on{display:block}
+.newchat{width:100%;display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:9px;
+         background:var(--accent);color:#fff;font-weight:600;font-size:14px;margin-bottom:16px}
+.sec{font-size:11.5px;font-weight:680;letter-spacing:.6px;text-transform:uppercase;
+     color:var(--muted);margin:16px 6px 7px}
+.row{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;
+     font-size:13.5px;cursor:pointer;color:var(--ink);width:100%;text-align:left}
+.row:hover{background:var(--panel-2)}
+.row.on{background:var(--accent-soft);color:var(--accent-ink)}
+/* On, and not a control: no pointer, no hover promise, and legible rather than
+   greyed out -- it is applied, not unavailable. */
+.row.fixed{cursor:default;opacity:.85}
+.row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.empty{color:var(--muted);font-size:12.5px;padding:8px 10px;line-height:1.55}
+
+/* ---- main --------------------------------------------------------------- */
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+#bar{height:52px;flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 14px;
+     border-bottom:1px solid var(--line);background:var(--panel)}
+.icon{width:34px;height:34px;border-radius:8px;display:grid;place-items:center;color:var(--muted)}
+.icon:hover{background:var(--panel-2);color:var(--ink)}
+#bar .title{font-weight:600;font-size:14px}
+#bar .sp{flex:1}
+.swatch{width:20px;height:20px;border-radius:50%;border:2px solid var(--line);cursor:pointer}
+.swatch.on{border-color:var(--accent)}
+
+#log{flex:1;overflow-y:auto;padding:26px 20px 10px;position:relative}
+.wrap{max-width:790px;margin:0 auto}
+
+/* The empty chat: the mark, large, and the name. Behind the stream and inert,
+   so the first message simply covers it rather than having to move it. */
+#blank{position:absolute;inset:0;display:grid;place-items:center;align-content:center;
+       pointer-events:none;user-select:none;text-align:center;gap:2px}
+#blank svg{width:104px;height:104px;color:var(--accent);opacity:.9}
+#blank h1{margin:14px 0 0;font-size:31px;font-weight:600;letter-spacing:-.3px;color:var(--ink)}
+#blank p{margin:0;color:var(--muted);font-size:14.5px}
+/* Pure CSS, so it cannot drift out of step with the script: the mark is hidden
+   the moment the stream holds anything. .gone is kept as a belt-and-braces
+   hook for the script. */
+#stream:not(:empty) + #blank{display:none}
+#blank.gone{display:none}
+.turn{margin-bottom:22px}
+.bubble{padding:13px 16px;border-radius:13px;word-wrap:break-word;overflow-wrap:anywhere}
+.user .bubble{background:var(--user-bg);border:1px solid var(--line);margin-left:auto;max-width:84%;width:fit-content}
+.bot .bubble{background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow)}
+.err .bubble{background:#fdecec;border:1px solid #f3b9b9;color:#8c1d1d}
+[data-theme="dark"] .err .bubble{background:#2a1618;border-color:#5c2a2f;color:#ffb4b4}
+.rtl{direction:rtl;text-align:right}
+.rtl.user .bubble{margin-left:0;margin-right:auto}
+.meta{margin-top:10px;padding-top:9px;border-top:1px solid var(--line);color:var(--muted);
+      font-size:12px;display:flex;flex-wrap:wrap;gap:7px;align-items:center}
+.tag{background:var(--accent-soft);color:var(--accent-ink);padding:2px 8px;border-radius:6px;
+     font-size:11.5px;font-weight:560}
+
+/* ---- stages: thinking, plan ---------------------------------------------- */
+.stage{display:flex;align-items:center;gap:10px;padding:10px 14px;margin-bottom:9px;
+       border:1px solid var(--line);border-radius:11px;background:var(--panel);
+       color:var(--muted);font-size:13.5px}
+.stage.done{opacity:.6}
+.orbit{position:relative;width:26px;height:26px;flex-shrink:0}
+.orbit .ring{position:absolute;inset:0;border-radius:50%;border:2px solid transparent;
+             border-top-color:var(--accent);border-right-color:var(--accent);
+             animation:spin 1.1s linear infinite}
+.orbit .cl{position:absolute;inset:0;display:grid;place-items:center;color:var(--accent)}
+@keyframes spin{to{transform:rotate(360deg)}}
+.stage .lamp,.stage .scroll{color:var(--accent);flex-shrink:0}
+.dots::after{content:'';animation:dots 1.4s steps(4,end) infinite}
+@keyframes dots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+.brief{font-family:var(--mono);font-size:12px;color:var(--muted);white-space:pre-wrap;
+       max-height:120px;overflow-y:auto;margin-top:7px;padding-top:7px;border-top:1px dashed var(--line)}
+
+/* ---- code --------------------------------------------------------------- */
+.code{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:11px 0;background:var(--code-bg)}
+.code-head{display:flex;align-items:center;gap:8px;padding:6px 11px;border-bottom:1px solid var(--line);
+           font-size:11.5px;color:var(--muted);font-family:var(--mono)}
+.code-head .sp{flex:1}
+.code-head button{padding:3px 9px;border-radius:6px;font-size:11.5px;color:var(--muted)}
+.code-head button:hover{background:var(--panel-2);color:var(--ink)}
+.code pre{margin:0;padding:12px;overflow-x:auto;direction:ltr;text-align:left}
+.code code{font-family:var(--mono);font-size:12.5px;line-height:1.6}
+:not(pre)>code{background:var(--code-bg);border:1px solid var(--line);padding:1px 5px;
+               border-radius:5px;font-family:var(--mono);font-size:12.5px;direction:ltr;
+               display:inline-block}
+.k{color:#c678dd}.s{color:#98c379}.c{color:#7d8799;font-style:italic}.n{color:#d19a66}.f{color:#61afef}
+[data-theme="light"] .k,:root .k{color:#a626a4}
+:root .s{color:#50a14f} :root .c{color:#a0a1a7} :root .n{color:#986801} :root .f{color:#4078f2}
+[data-theme="dark"] .k{color:#c678dd}[data-theme="dark"] .s{color:#98c379}
+[data-theme="dark"] .c{color:#7d8799}[data-theme="dark"] .n{color:#d19a66}[data-theme="dark"] .f{color:#61afef}
+
+/* ---- composer ------------------------------------------------------------ */
+#foot{flex-shrink:0;padding:12px 20px 16px;background:var(--bg)}
+.composer{max-width:790px;margin:0 auto;background:var(--panel);border:1px solid var(--line);
+          border-radius:15px;box-shadow:var(--shadow);overflow:visible}
+.composer:focus-within{border-color:var(--accent)}
+#input{padding:13px 15px;min-height:52px;max-height:210px;overflow-y:auto;outline:none;
+       font:inherit;line-height:1.6}
+#input:empty:before{content:attr(data-ph);color:var(--muted)}
+.tools{display:flex;align-items:center;gap:5px;padding:7px 9px 9px;border-top:1px solid var(--line)}
+.tool{height:31px;padding:0 10px;border-radius:8px;display:flex;align-items:center;gap:6px;
+      font-size:12.5px;color:var(--muted);font-weight:550}
+.tool:hover{background:var(--panel-2);color:var(--ink)}
+.tool.sq{width:31px;padding:0;justify-content:center}
+.tools .sp{flex:1}
+#send{width:40px;height:34px;border-radius:9px;background:var(--accent);display:grid;place-items:center}
+#send:disabled{opacity:.45;cursor:not-allowed}
+.hint{max-width:790px;margin:8px auto 0;color:var(--muted);font-size:11.5px}
+
+/* gear token: a vertical spanner standing in for @CR-*, named on hover */
+.gear-tok{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;
+          border-radius:6px;background:var(--accent-soft);color:var(--accent-ink);
+          vertical-align:-5px;margin:0 2px;cursor:default;position:relative}
+.gear-tok:hover:after{content:attr(data-label);position:absolute;bottom:130%;left:50%;
+       transform:translateX(-50%);background:var(--ink);color:var(--bg);font-size:11.5px;
+       padding:5px 9px;border-radius:7px;white-space:nowrap;z-index:20;font-family:var(--font)}
+
+/* ---- popovers ----------------------------------------------------------- */
+.pop{position:absolute;bottom:calc(100% + 8px);left:0;background:var(--panel);
+     border:1px solid var(--line);border-radius:11px;box-shadow:0 8px 26px rgba(0,0,0,.16);
+     padding:6px;min-width:250px;z-index:30;display:none}
+.pop.on{display:block}
+.pop-h{font-size:11px;font-weight:680;letter-spacing:.5px;text-transform:uppercase;
+       color:var(--muted);padding:7px 10px 5px}
+.pop button{width:100%;display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;
+            font-size:13.5px;text-align:left}
+.pop button:hover{background:var(--panel-2)}
+.pop button:disabled{opacity:.75;cursor:default}
+.pop button:disabled:hover{background:none}
+.pop .sub{font-size:12px;color:var(--muted);padding-left:8px}
+.pop hr{border:0;border-top:1px solid var(--line);margin:5px 0}
+.holder{position:relative}
+.check{color:var(--accent);margin-left:auto}
+
+#shell{display:flex;width:100%;height:100%}
+.gate{width:100%;place-items:center;text-align:center;padding:36px}
+.signin{display:flex;align-items:center;justify-content:center;gap:10px;width:262px;margin:0 auto 10px;
+        padding:11px 16px;border:1px solid var(--line);border-radius:10px;background:var(--panel);
+        font-size:14px;font-weight:560;box-shadow:var(--shadow)}
+.signin:hover{border-color:var(--accent)}
+/* Sits under the two buttons at their width, so the column still reads as one
+   block rather than a form with something bolted beneath it. */
+.keep{display:flex;align-items:center;gap:9px;width:262px;margin:14px auto 0;
+      font-size:13px;color:var(--muted);cursor:pointer;text-align:left}
+.keep input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer;flex:none}
+
+#attached{display:flex;flex-wrap:wrap;gap:6px;padding:0 15px}
+#attached:not(:empty){padding-top:11px}
+.chip-file{display:inline-flex;align-items:center;gap:6px;background:var(--panel-2);
+           border:1px solid var(--line);border-radius:7px;padding:3px 5px 3px 9px;font-size:12px}
+.chip-file button{color:var(--muted);font-size:15px;line-height:1;padding:0 3px}
+.chip-file button:hover{color:var(--ink)}
+
+.hintlet{margin-left:auto;color:var(--muted);font-size:10.5px;flex-shrink:0}
+.tool.lit{color:var(--accent-ink);background:var(--accent-soft)}
+.gate-footer{margin-top:34px;display:flex;gap:14px;flex-wrap:wrap;justify-content:center;
+  align-items:center;font-size:12px;color:var(--muted)}
+.gate-footer a{color:var(--muted);text-decoration:none}
+.gate-footer a:hover{color:var(--ink);text-decoration:underline}
+.pop button.on{background:var(--accent-soft);color:var(--accent-ink)}
+.pop button.on b{color:inherit}
+#chipList:empty:before{content:"No chips yet.";color:var(--muted);font-size:12.5px;
+                       display:block;padding:8px 10px}
+
+#chipForm{position:fixed;inset:0;background:rgba(10,14,20,.5);z-index:60;
+          display:none;place-items:center;padding:20px}
+#chipForm.on{display:grid}
+#chipForm .sheet{background:var(--panel);border:1px solid var(--line);border-radius:15px;
+                 padding:22px;width:min(560px,100%);max-height:88vh;overflow-y:auto;
+                 box-shadow:0 20px 50px rgba(0,0,0,.28)}
+#chipForm h3{margin:0 0 6px;font-size:18px}
+#chipForm .lede{margin:0 0 18px;color:var(--muted);font-size:13px;line-height:1.6}
+#chipForm label{display:block;font-size:12.5px;font-weight:600;margin:14px 0 5px}
+#chipForm .opt{font-weight:400;color:var(--muted)}
+#chipForm input[type=text],#chipForm input:not([type]),#chipForm textarea{
+  width:100%;background:var(--bg);border:1px solid var(--line);color:var(--ink);
+  border-radius:9px;padding:10px 12px;font:inherit;font-size:14px}
+#chipForm textarea{resize:vertical;font-family:var(--mono);font-size:12.5px;line-height:1.6}
+#chipForm input:focus,#chipForm textarea:focus{outline:none;border-color:var(--accent)}
+.check-row{display:flex;align-items:flex-start;gap:9px;font-weight:400!important;
+           font-size:12.5px;color:var(--muted);margin-top:16px!important}
+.check-row input{margin-top:2px}
+.sheet-foot{display:flex;justify-content:flex-end;gap:9px;margin-top:20px}
+.sheet-foot button{padding:9px 18px;border-radius:9px;font-size:13.5px;font-weight:600}
+.sheet-foot .ghost{color:var(--muted)}
+.sheet-foot .ghost:hover{background:var(--panel-2);color:var(--ink)}
+.sheet-foot .primary{background:var(--accent);color:#fff}
+
+/* Mobile: the sidebar covers the page rather than sitting beside it.
+   It was fixed with z-index 50, which put it over the top bar -- including the
+   button that closes it -- so it opened and could not be shut. It now slides,
+   the bar stays above it, and a backdrop gives the obvious way out. */
+@media(max-width:760px){
+  #side{position:fixed;top:0;left:0;z-index:40;height:100%;
+        transition:transform .18s ease;margin-left:0}
+  #side.hidden{transform:translateX(-100%);margin-left:0}
+  #bar{position:relative;z-index:45}
+  #backdrop{position:fixed;inset:0;background:rgba(10,14,20,.45);z-index:35;display:block}
+  #side.hidden ~ #main #backdrop, #side.hidden + #main #backdrop{display:none}
+}
+#backdrop{display:none}
+.pop a.pop-link{display:block;padding:8px 12px;border-radius:8px;color:inherit;text-decoration:none;font-size:13px}
+.pop a.pop-link:hover{background:var(--panel-2)}
+a.icon{display:inline-grid;place-items:center;color:inherit}
+#soloBtn:disabled{opacity:1;cursor:default}
+.pop button:disabled .sub{opacity:.9}
+</style>
+</head>
+<body data-theme="light" data-accent="blue">
+
+<svg class="mark-defs" width="0" height="0" aria-hidden="true" focusable="false"
+     style="position:absolute;width:0;height:0;overflow:hidden">
+  <defs>
+    <mask id="ahoosGap" maskUnits="userSpaceOnUse" x="0" y="0" width="1000" height="1000">
+      <rect width="1000" height="1000" fill="#fff"/>
+      <g transform="rotate(-20 500 500)"><ellipse cx="500" cy="500" rx="372" ry="152" fill="none" stroke="#000" stroke-width="104"/></g>
+    </mask>
+    <mask id="ahoosDip" maskUnits="userSpaceOnUse" x="0" y="0" width="1000" height="1000">
+      <rect width="1000" height="1000" fill="#fff"/>
+      <path d="M582 430 H700 V712 H582 Z" fill="#000"/>
+    </mask>
+  </defs>
+</svg>
+<div id="gate" hidden>
+  <button id="gGoogle" hidden></button><button id="gGithub" hidden></button>
+  <input type="checkbox" id="keepSignedIn" hidden><div id="authError" hidden></div>
+</div>
+<div id="shell" style="display:none">
+<aside id="side">
+  <div class="side-top">
+    <div class="brand">
+      <svg width="21" height="21" style="color:var(--accent)" viewBox="124 124 752 752" aria-hidden="true"><circle cx="500" cy="500" r="330" fill="none" stroke="currentColor" stroke-width="42" mask="url(#ahoosGap)"/><path d="M 505 292 L 692 700 L 732 700 L 732 722 L 548 722 L 548 700 L 588 700 L 505 388 L 356 700 L 396 700 L 396 722 L 278 722 L 278 700 L 318 700 Z" fill="currentColor"/><g transform="rotate(-20 500 500)" mask="url(#ahoosDip)"><ellipse cx="500" cy="500" rx="372" ry="152" fill="none" stroke="currentColor" stroke-width="42"/></g></svg>
+      AhoosAI Studio
+      <span class="beta">offline</span>
+    </div>
+    <div class="tabs">
+      <button class="on" data-pane="mainPane">Main</button>
+      <button data-pane="explPane">Explorer</button>
+    </div>
+  </div>
+
+  <div class="pane on" id="mainPane">
+    <button class="newchat" id="newChat">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+      New chat
+    </button>
+    <div class="sec">History</div>
+    <div id="history"><div class="empty">No chats yet. They are kept on this computer.</div></div>
+    <div class="sec">Library</div>
+    <div id="library">
+      <button class="row" data-chip="rtl-web">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
+        <span>RTL Web</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="pane" id="explPane">
+    <div style="display:flex;gap:6px;margin-bottom:14px">
+      <button class="row" id="dlAll" style="justify-content:center;background:var(--panel-2)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+        <span>Download</span>
+      </button>
+      <button class="row" id="dlZip" style="justify-content:center;background:var(--panel-2)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 8v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6M14 3h7v7M10 14 21 3"/></svg>
+        <span>As ZIP</span>
+      </button>
+    </div>
+    <div class="sec">Files</div>
+    <div id="files"><div class="empty">Files the model writes appear here. They are saved on this computer.</div></div>
+  </div>
+</aside>
+
+<div id="main">
+  <div id="bar">
+    <button class="icon" id="toggleSide" title="Menu">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+    </button>
+    <div class="title" id="chatTitle">New chat</div>
+    <div class="sp"></div>
+    <div class="swatch on" data-accent="blue"  style="background:#2f6fed" title="Blue"></div>
+    <div class="swatch"    data-accent="purple" style="background:#7c5cff" title="Purple"></div>
+    <button class="icon" id="toggleTheme" title="Light / dark">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+    <img id="avatar" hidden alt=""><span id="who" hidden></span>
+    <a class="icon" id="modelSettings" href="setup.html" title="Model and downloads">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+    </a>
+    <button class="icon" id="signOut" hidden></button>
+  </div>
+
+  <!-- Mobile only: tapping outside the open sidebar closes it. -->
+  <div id="backdrop"></div>
+
+  <div id="log">
+    <div class="wrap" id="stream"></div>
+    <!-- Shown only while a chat is empty. Sits behind the stream and ignores
+         the pointer, so it can never get in the way of the conversation. -->
+    <div id="blank">
+      <svg width="1.15" viewBox="124 124 752 752" aria-hidden="true"><circle cx="500" cy="500" r="330" fill="none" stroke="currentColor" stroke-width="42" mask="url(#ahoosGap)"/><path d="M 505 292 L 692 700 L 732 700 L 732 722 L 548 722 L 548 700 L 588 700 L 505 388 L 356 700 L 396 700 L 396 722 L 278 722 L 278 700 L 318 700 Z" fill="currentColor"/><g transform="rotate(-20 500 500)" mask="url(#ahoosDip)"><ellipse cx="500" cy="500" rx="372" ry="152" fill="none" stroke="currentColor" stroke-width="42"/></g></svg>
+      <h1>AhoosAI Studio</h1>
+      <p>A team, not a model.</p>
+    </div>
+  </div>
+
+  <div id="foot">
+    <div class="composer">
+      <div id="attached"></div>
+      <div id="input" contenteditable="true" data-ph="Ask AhoosAI Studio…"></div>
+      <div class="tools">
+
+        <div class="holder">
+          <button class="tool" id="modelBtn">
+            <svg width="14" height="14" viewBox="124 124 752 752" aria-hidden="true"><circle cx="500" cy="500" r="330" fill="none" stroke="currentColor" stroke-width="42" mask="url(#ahoosGap)"/><path d="M 505 292 L 692 700 L 732 700 L 732 722 L 548 722 L 548 700 L 588 700 L 505 388 L 356 700 L 396 700 L 396 722 L 278 722 L 278 700 L 318 700 Z" fill="currentColor"/><g transform="rotate(-20 500 500)" mask="url(#ahoosDip)"><ellipse cx="500" cy="500" rx="372" ry="152" fill="none" stroke="currentColor" stroke-width="42"/></g></svg>
+            Nimbus 1.1 Prime-EE
+          </button>
+          <div class="pop" id="modelPop">
+            <div class="pop-h">On this computer</div>
+            <button disabled><b>Nimbus 1.1 Prime-EE</b><span class="sub">answers every message</span></button>
+            <hr>
+            <a class="pop-link" href="setup.html">Model and downloads…</a>
+          </div>
+        </div>
+
+        <div class="holder">
+          <button class="tool" id="thinkBtn" title="How hard the models think">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg>
+            <span id="thinkLabel">Medium</span>
+          </button>
+          <div class="pop" id="thinkPop">
+            <div class="pop-h">Effort &mdash; overrides every model's own default</div>
+            <button data-effort=""><b>Each model's own</b><span class="sub">the model's own default</span></button>
+            <hr>
+            <button data-effort="low"><b>Low</b><span class="sub">a lookup, a rename, a one-liner</span></button>
+            <button data-effort="medium"><b>Medium</b><span class="sub">ordinary work</span></button>
+            <button data-effort="high"><b>High</b><span class="sub">design decisions, tricky code</span></button>
+            <button data-effort="xhigh"><b>xHigh</b><span class="sub">root-cause debugging, hard implementation</span></button>
+            <button data-effort="max"><b>Max</b><span class="sub">slowest and dearest &mdash; use it when the others missed</span></button>
+          </div>
+        </div>
+
+        <button class="tool sq lit" id="soloBtn" disabled aria-pressed="true" title="One model answers. Team mode needs the online studio.">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </button>
+
+        <div class="holder">
+          <button class="tool sq" id="gearBtn" title="Gears">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 4a2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 21 11a2 2 0 1 1 0 4z"/></svg>
+          </button>
+          <div class="pop" id="gearPop">
+            <div class="pop-h">Gears</div>
+            <button data-gear="CR-image" disabled><b>@CR-image</b><span class="sub">not supported</span></button>
+            <button data-gear="CR-file"><b>@CR-file</b><span class="sub">deliver files, not chat code blocks</span></button>
+          </div>
+        </div>
+
+        <div class="holder">
+          <button class="tool sq" id="chipBtn" title="Skill chips">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
+          </button>
+          <div class="pop" id="chipPop">
+            <div class="pop-h">Chips — up to 5 at once</div>
+            <div id="chipList"></div>
+            <hr>
+            <button id="chipNew">Create a chip…</button>
+            <button id="chipUp">Import a .zip…</button>
+          </div>
+        </div>
+
+        <button class="tool sq" id="attachBtn" title="Attach a file">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21.4 11.05 12.25 20.2a5.5 5.5 0 0 1-7.78-7.78l9.2-9.19a3.67 3.67 0 0 1 5.18 5.18l-9.2 9.2a1.83 1.83 0 1 1-2.59-2.6l8.5-8.48"/></svg>
+        </button>
+        <input type="file" id="file" multiple hidden>
+        <input type="file" id="chipZip" accept=".zip" hidden>
+
+        <div class="sp"></div>
+
+        <button id="send" title="Send">
+          <!-- The cloud stays white in every theme: it is the mark, not a surface. -->
+          <svg width="21" height="21" style="color:#fff" viewBox="124 124 752 752" aria-hidden="true"><circle cx="500" cy="500" r="330" fill="none" stroke="currentColor" stroke-width="42" mask="url(#ahoosGap)"/><path d="M 505 292 L 692 700 L 732 700 L 732 722 L 548 722 L 548 700 L 588 700 L 505 388 L 356 700 L 396 700 L 396 722 L 278 722 L 278 700 L 318 700 Z" fill="currentColor"/><g transform="rotate(-20 500 500)" mask="url(#ahoosDip)"><ellipse cx="500" cy="500" rx="372" ry="152" fill="none" stroke="currentColor" stroke-width="42"/></g></svg>
+        </button>
+      </div>
+    </div>
+    <div class="hint">Enter sends · Shift+Enter for a new line · no memory between messages</div>
+  </div>
+</div>
+
+<div id="chipForm">
+  <div class="sheet">
+    <h3>New chip</h3>
+    <p class="lede">A chip is emphasis, not instructions. It is appended after a
+    model&rsquo;s own prompt, so it refines a model that already knows its job
+    rather than telling it what to be.</p>
+
+    <label>Name</label>
+    <input id="cfName" maxlength="80" placeholder="House style">
+
+    <label>Summary <span class="opt">optional</span></label>
+    <input id="cfSummary" maxlength="200" placeholder="What this chip is for">
+
+    <label>Content <span class="opt">up to 8000 characters</span></label>
+    <textarea id="cfContent" rows="9" placeholder="Prefer logical CSS properties over physical ones.&#10;Keep answers to the point; skip the preamble.&#10;When you write SQL, always parameterise."></textarea>
+
+    <label class="check-row">
+      <input type="checkbox" id="cfPublic" hidden>
+      <span>Chips are kept on this computer.</span>
+    </label>
+
+    <div class="sheet-foot">
+      <button id="cfCancel" class="ghost">Cancel</button>
+      <button id="cfSave" class="primary">Create</button>
+    </div>
+  </div>
+</div>
+
+</div><!-- /#shell -->
+
+<script src="local-supabase.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script>window.CFG = { url: 'local', key: 'local' };</script>
+<script src="app.js"></script>
+
+</body>
+</html>

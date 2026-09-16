@@ -1,0 +1,57 @@
+# ---------------------------------------------------------------------------
+# Nimbus 1.1 Prime-EE, as the offline studio runs it.
+#
+# One model and no team. It is the manager only because the registry needs one
+# model to answer a request that names nobody; there is no roster to delegate to,
+# and the offline studio runs solo on every message.
+#
+# WHY IT ADOPTS NO BASE BLOCKS
+#
+# The adapter was trained under exactly the three sentences in system.md, and the
+# model card says it expects them. The online family composes a long prompt from
+# base blocks -- delegation, worker protocol, deep search -- and every one of
+# those is an instruction this model cannot act on offline and was never trained
+# beside. On a 7B model running on a laptop they would also spend a thousand
+# tokens of context on every message saying nothing useful.
+#
+# Chips still append after system.md, and @CR-file still adds its instruction to
+# the request, because both are additions to a model that knows its job.
+# ---------------------------------------------------------------------------
+
+schema_version = 1
+
+[model]
+id      = "nimbus-1.1-prime-ee"
+name    = "Nimbus 1.1 Prime-EE"
+version = "1.1"
+role    = "manager"
+domain  = "Code, with right-to-left layouts, accessibility and container hardening"
+summary = "A behaviour adapter over Qwen2.5-Coder-7B-Instruct, running on this computer."
+system  = "system.md"
+
+adopt = []
+
+[manager]
+roster = []
+
+[engine]
+provider   = "local"
+model_id   = "nimbus-1.1-prime-ee"
+# A 7B on a CPU writes a few tokens a second. The cap is what keeps a runaway
+# answer from occupying the machine for ten minutes; it is well above what a
+# complete file needs.
+max_tokens = 4096
+
+[thinking]
+default = "medium"
+
+[capabilities]
+deep_search = false
+
+[card]
+intended_use = "Writing and fixing code offline, in the language the question was asked in."
+out_of_scope = "Images and web search need the online studio."
+limitations = [
+  "Runs on the CPU unless configured otherwise; long answers take minutes.",
+  "Image specifications regressed against the base model; the adapter had no image data.",
+]

@@ -1,0 +1,85 @@
+# ---------------------------------------------------------------------------
+# Nimbus Base — definition of the Nimbus family's base model.
+#
+# The project's core contract:
+#   "We do not use the base model as-is — we take the best parts of it."
+#
+# This file breaks the base into adoptable blocks. No model inherits the whole
+# base; each model names only the blocks it needs via `adopt` in its own
+# model.toml.
+# ---------------------------------------------------------------------------
+
+schema_version = 1
+
+# --- Block render order -----------------------------------------------------
+# Every model's system prompt is assembled in exactly this order; blocks the
+# model did not adopt are skipped.
+#
+# This must stay above every table header below it. A bare key in TOML belongs to
+# the most recent [table], so moving it further down silently reparents it.
+block_order = []
+
+[base]
+id      = "nimbus-base"
+name    = "Nimbus Base"
+version = "1.0"
+family  = "Nimbus"
+vendor  = "Ahoos Model Studio"
+summary = "Shared behavioural spine of the Nimbus family. Not a runnable model on its own."
+
+# --- Upstream base model ----------------------------------------------------
+# Phase 1: every Nimbus model runs on a cloud API (see models/*/model.toml).
+# Phase 2: the same model switches to our own fine-tuned weights without any
+#          other part of the system changing. The candidates below are proposals
+#          only — re-verify each licence immediately before training, since model
+#          licences change.
+[base.upstream]
+license_policy   = "permissive-only"   # Apache-2.0 / MIT / BSD only
+text_candidates  = ["Qwen3 (Apache-2.0)", "Mistral (Apache-2.0)"]
+image_candidates = ["FLUX.1-schnell (Apache-2.0)"]
+derivation       = "fine-tune"         # derived, not copied: open weights + our own adapter
+note = "Re-verify each candidate's licence before downloading any weights."
+
+# --- Thinking ladder --------------------------------------------------------
+# Five levels, shared family-wide. Each model sets its own default in its
+# model.toml; the manager picks a level per delegation, and any level can be
+# overridden per request from the CLI.
+[thinking]
+levels  = ["low", "medium", "high", "xhigh", "max"]
+default = "high"
+
+[thinking.descriptions]
+low    = "Short, scoped work. Lowest latency and cost. Risks under-thinking anything multi-step."
+medium = "Routine work where quality holds at reduced spend."
+high   = "The default. Balanced depth for intelligence-sensitive work."
+xhigh  = "Hardest coding, debugging and agentic work. Needs generous max_tokens."
+max    = "Correctness matters more than cost. Can overthink simple tasks."
+
+# --- Writing languages ------------------------------------------------------
+# Nimbus writes natively in five languages. Everything else is *bridged*: the
+# model works in the pivot language and delivers in the target. Bridged languages
+# need no training of their own — that is the entire point of having a pivot.
+[language]
+pivot  = "en"
+native = ["en", "ar", "es", "pt", "fa"]
+
+# Metadata for the CLI and for graphical clients. This catalogue is not a limit:
+# a language absent from it is still bridged, it just has no display metadata.
+[language.catalog]
+en = { name = "English",    endonym = "English",    direction = "ltr" }
+ar = { name = "Arabic",     endonym = "العربية",     direction = "rtl" }
+es = { name = "Spanish",    endonym = "Español",    direction = "ltr" }
+pt = { name = "Portuguese", endonym = "Português",  direction = "ltr" }
+fa = { name = "Persian",    endonym = "فارسی",       direction = "rtl" }
+he = { name = "Hebrew",     endonym = "עברית",       direction = "rtl" }
+ur = { name = "Urdu",       endonym = "اردو",        direction = "rtl" }
+fr = { name = "French",     endonym = "Français",   direction = "ltr" }
+de = { name = "German",     endonym = "Deutsch",    direction = "ltr" }
+ru = { name = "Russian",    endonym = "Русский",    direction = "ltr" }
+tr = { name = "Turkish",    endonym = "Türkçe",     direction = "ltr" }
+hi = { name = "Hindi",      endonym = "हिन्दी",       direction = "ltr" }
+zh = { name = "Chinese",    endonym = "中文",         direction = "ltr" }
+ja = { name = "Japanese",   endonym = "日本語",       direction = "ltr" }
+id = { name = "Indonesian", endonym = "Indonesia",  direction = "ltr" }
+
+# --- Adoptable blocks -------------------------------------------------------

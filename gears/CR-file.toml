@@ -1,0 +1,46 @@
+# ---------------------------------------------------------------------------
+# Gear: Create File
+#
+#   @CR-file a docker-compose for postgres and redis
+#
+# For when you asked for something in chat but do not want it dumped back at you as
+# code blocks inside the conversation. This gear says: put it in files and hand the
+# files over.
+#
+# It is a MODIFIER gear — it does not pin a handler, because which specialist should
+# write the file depends entirely on what the file is. It shapes the delivery
+# instead, and applies to whoever ends up doing the work.
+# ---------------------------------------------------------------------------
+
+schema_version = 1
+
+[gear]
+id      = "CR-file"
+name    = "Create File"
+version = "1.0"
+kind    = "modifier"
+summary = "Deliver the work as files rather than as code blocks in the conversation."
+
+[invocation]
+token = "@CR-file"
+
+[behaviour]
+instruction = """
+Deliver this work as files, not as code pasted into the conversation.
+
+Emit each file in its own fenced block with the exact filename on the line
+immediately above it, so it can be written to disk under that name. Write every file
+in full — no ellipses, no "rest of the implementation here", nothing the reader has
+to assemble by hand. If the work needs several files, give all of them, including
+any configuration or dependency manifest required to run it.
+
+Keep prose to the minimum needed to say what the files are and how they fit
+together. The files are the deliverable; the explanation is not.
+"""
+
+[ui]
+label   = "Create File"
+icon    = "file-plus"
+accent  = "#3C7FE0"
+hover   = "Delivers the work as files instead of code blocks in the chat."
+example = "@CR-file a docker-compose.yml for postgres and redis"

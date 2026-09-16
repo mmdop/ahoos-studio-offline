@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------------------
+# Example Skill Chip.
+#
+# Zip the contents of this folder and import it:
+#
+#   python -m studio chips import examples/rtl-web.chip.zip
+#
+# Everything below is required except [ui], which exists only so a graphical
+# client can render the chip.
+# ---------------------------------------------------------------------------
+
+schema_version = 1
+
+[chip]
+id      = "rtl-web"
+name    = "RTL Web"
+version = "1.0"
+author  = "Ahoos Model Studio"
+summary = "Emphasises right-to-left correctness in front-end work."
+
+[apply]
+# Which models this chip is attached to. Use ["*"] for the whole family.
+models  = ["nimbus-frontend-rza-1.0"]
+enabled = true
+# The Markdown files whose contents get appended to the target's system prompt,
+# in this order.
+files   = ["SKILL.md", "checklist.md"]
+
+[license]
+file   = "LICENSE.md"
+# The holder's name must actually appear inside the licence file, or the chip is
+# refused at import time.
+holder = "Ahoos Model Studio"
+
+[ui]
+label  = "RTL Web"
+icon   = "chip"
+accent = "#7A5CE0"
+hover  = "Front-end output is built right-to-left first, not patched afterwards."

@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" role="img" aria-label="AhoosAI"
+     color="#16150f">
+<!--
+  AhoosAI mark.
+
+  Drawn as geometry rather than traced from an image: every curve is a path, so
+  there is no watermark to remove, nothing goes soft when it is scaled, and the
+  file is a few kilobytes rather than a few hundred.
+
+  Three parts, in painting order:
+
+    ring    the circle, broken where the sweep crosses it, so the two read as
+            one object in space rather than two flat outlines laid on top of
+            each other
+    letter  a Didone A: thin left stroke, thick right, flat serifs, and
+            deliberately no crossbar
+    sweep   the ellipse, which becomes the crossbar as it passes through
+
+  The missing crossbar is the idea. The letter is only finished when the orbit
+  crosses it; draw the bar in and the sweep is decoration.
+
+  Everything is currentColor, with an explicit color on the root as the value it
+  inherits. That matters because the same file is used two ways: inlined in a
+  page it takes the surrounding colour, and loaded on its own — as a favicon, or
+  through an img tag — it has no ancestor to inherit from and would otherwise
+  fall back to plain black.
+-->
+  <defs>
+    <!-- Hide the ring under the sweep. The mask stroke is wider than the sweep
+         itself so a hairline of ground shows on either side, which is what
+         makes the gap read as depth rather than as a missing segment. -->
+    <mask id="ringGap">
+      <rect width="1000" height="1000" fill="#fff"/>
+      <g transform="rotate(-20 500 500)">
+        <ellipse cx="500" cy="500" rx="372" ry="152"
+                 fill="none" stroke="#000" stroke-width="34"/>
+      </g>
+    </mask>
+
+    <!-- The sweep passes behind the thick right stroke and in front of
+         everything else. Without this it sits flat on the letter. -->
+    <mask id="sweepDip">
+      <rect width="1000" height="1000" fill="#fff"/>
+      <path d="M582 430 H700 V712 H582 Z" fill="#000"/>
+    </mask>
+  </defs>
+
+  <g stroke="currentColor" stroke-linecap="butt">
+
+    <circle cx="500" cy="500" r="330" fill="none" stroke-width="8" mask="url(#ringGap)"/>
+
+    <path fill="currentColor" stroke="none" d="
+      M 505 292
+      L 692 700  L 732 700  L 732 722  L 548 722  L 548 700  L 588 700
+      L 505 388
+      L 356 700  L 396 700  L 396 722  L 278 722  L 278 700  L 318 700
+      Z"/>
+
+    <g transform="rotate(-20 500 500)" mask="url(#sweepDip)">
+      <ellipse cx="500" cy="500" rx="372" ry="152" fill="none" stroke-width="8"/>
+    </g>
+  </g>
+</svg>

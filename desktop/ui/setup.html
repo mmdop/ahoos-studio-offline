@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="logo.svg">
+<title>Model and downloads — AhoosAI Studio</title>
+<style>
+/* The setup page. Same tokens as the studio, so moving between the two does not
+   feel like leaving the app -- and no web fonts, because this page is the one
+   most likely to be open before anything has been downloaded. */
+:root{
+  --bg:#f7f8fa; --panel:#fff; --panel-2:#f0f2f6; --line:#dfe3ea;
+  --ink:#1a1d24; --muted:#646b7a; --accent:#2f6fed; --accent-soft:#e5edfd;
+  --ok:#1a7f4b; --bad:#b3402c;
+  --font:"Segoe UI",-apple-system,BlinkMacSystemFont,Roboto,"Noto Sans","Noto Sans Arabic",Tahoma,Arial,sans-serif;
+  --mono:"Cascadia Mono",Consolas,"SF Mono",Menlo,monospace;
+}
+body[data-theme=dark]{
+  --bg:#000; --panel:#0e0e10; --panel-2:#17171a; --line:#26262b;
+  --ink:#ececf1; --muted:#9a9aa6; --accent-soft:#16233f; --ok:#4ec98a; --bad:#e4785f;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 var(--font)}
+.wrap{max-width:760px;margin:0 auto;padding:36px 22px 60px}
+header{display:flex;align-items:center;gap:14px;margin-bottom:26px}
+header svg{width:46px;height:46px;color:var(--accent);flex:none}
+header h1{margin:0;font-size:21px;letter-spacing:-.01em}
+header p{margin:2px 0 0;color:var(--muted);font-size:13.5px}
+header .sp{flex:1}
+.lang{display:flex;border:1px solid var(--line);border-radius:99px;padding:3px}
+.lang button{border:0;background:none;color:var(--muted);font:500 13px var(--font);
+  padding:5px 12px;border-radius:99px;cursor:pointer}
+.lang button.on{background:var(--ink);color:var(--bg)}
+a.back{color:var(--muted);text-decoration:none;font-size:14px}
+a.back:hover{color:var(--ink)}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-top:16px}
+.card h2{margin:0 0 4px;font-size:16px}
+.card p.lead{margin:0 0 14px;color:var(--muted);font-size:14px}
+
+.state{display:flex;align-items:center;gap:10px;font-weight:600}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--muted);flex:none}
+.state.ready .dot{background:var(--ok)}
+.state.loading .dot{background:var(--accent);animation:pulse 1.2s ease-in-out infinite}
+.state.failed .dot{background:var(--bad)}
+@keyframes pulse{50%{opacity:.35}}
+@media(prefers-reduced-motion:reduce){.state.loading .dot{animation:none}}
+pre.log{margin:10px 0 0;padding:10px 12px;background:var(--panel-2);border-radius:8px;
+  font:12px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted);max-height:160px;overflow:auto}
+pre.log:empty{display:none}
+
+.build{display:grid;grid-template-columns:1fr auto;gap:6px 14px;align-items:center;
+  padding:14px 0;border-top:1px solid var(--line)}
+.build:first-of-type{border-top:0}
+.build .name{font-weight:600}
+.build .name .key{font:500 12.5px var(--mono);color:var(--muted);margin-inline-start:8px}
+.build .desc{color:var(--muted);font-size:13.5px;grid-column:1}
+.build .acts{grid-row:1/span 2;grid-column:2;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.tag{font-size:12px;padding:3px 9px;border-radius:99px;background:var(--panel-2);color:var(--muted)}
+.tag.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.tag.warn{color:var(--bad)}
+button.btn{font:500 14px var(--font);border-radius:9px;padding:8px 14px;cursor:pointer;
+  border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+button.btn:hover{border-color:var(--accent)}
+button.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.btn:disabled{opacity:.5;cursor:default}
+
+.progress{grid-column:1/-1;margin-top:4px}
+.track{height:8px;border-radius:99px;background:var(--panel-2);overflow:hidden}
+.fill{height:100%;background:var(--accent);border-radius:99px;transition:width .4s}
+.nums{display:flex;justify-content:space-between;gap:10px;font:12.5px var(--mono);color:var(--muted);margin-top:6px}
+.error{color:var(--bad);font-size:13.5px;grid-column:1/-1}
+
+dl.facts{display:grid;grid-template-columns:auto 1fr;gap:6px 18px;margin:0;font-size:14px}
+dl.facts dt{color:var(--muted)}
+dl.facts dd{margin:0;font-family:var(--mono);font-size:13px;overflow-wrap:anywhere}
+.row-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.go{display:flex;justify-content:flex-end;margin-top:22px}
+@media(max-width:560px){.build{grid-template-columns:1fr}.build .acts{grid-row:auto;grid-column:1;justify-content:flex-start}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <svg viewBox="124 124 752 752" aria-hidden="true">
+      <defs>
+        <mask id="g" maskUnits="userSpaceOnUse" x="0" y="0" width="1000" height="1000">
+          <rect width="1000" height="1000" fill="#fff"/>
+          <g transform="rotate(-20 500 500)"><ellipse cx="500" cy="500" rx="372" ry="152" fill="none" stroke="#000" stroke-width="80"/></g>
+        </mask>
+        <mask id="d" maskUnits="userSpaceOnUse" x="0" y="0" width="1000" height="1000">
+          <rect width="1000" height="1000" fill="#fff"/><path d="M582 430 H700 V712 H582 Z" fill="#000"/>
+        </mask>
+      </defs>
+      <circle cx="500" cy="500" r="330" fill="none" stroke="currentColor" stroke-width="26" mask="url(#g)"/>
+      <path fill="currentColor" d="M 505 292 L 692 700 L 732 700 L 732 722 L 548 722 L 548 700 L 588 700 L 505 388 L 356 700 L 396 700 L 396 722 L 278 722 L 278 700 L 318 700 Z"/>
+      <g transform="rotate(-20 500 500)" mask="url(#d)"><ellipse cx="500" cy="500" rx="372" ry="152" fill="none" stroke="currentColor" stroke-width="26"/></g>
+    </svg>
+    <div>
+      <h1 data-t="title"></h1>
+      <p data-t="subtitle"></p>
+    </div>
+    <div class="sp"></div>
+    <div class="lang"><button data-lang="en">EN</button><button data-lang="fa">فا</button></div>
+  </header>
+
+  <a class="back" href="index.html" id="back" data-t="back"></a>
+
+  <section class="card">
+    <h2 data-t="modelH"></h2>
+    <div class="state" id="state"><span class="dot"></span><span id="stateText"></span></div>
+    <pre class="log" id="log"></pre>
+  </section>
+
+  <section class="card">
+    <h2 data-t="buildsH"></h2>
+    <p class="lead" data-t="buildsLead"></p>
+    <div id="builds"></div>
+  </section>
+
+  <section class="card">
+    <h2 data-t="machineH"></h2>
+    <dl class="facts" id="facts"></dl>
+    <div class="row-btns">
+      <button class="btn" data-open="models" data-t="openModels"></button>
+      <button class="btn" data-open="files" data-t="openFiles"></button>
+    </div>
+  </section>
+
+  <div class="go"><button class="btn primary" id="start" data-t="start" hidden></button></div>
+</div>
+
+<script>
+'use strict';
+/* Two languages side by side, as on the site: a string missing from one is
+   visible in the line above the one that has it. */
+const T = {
+  en: {
+    title: 'AhoosAI Studio', subtitle: 'Offline — the model runs on this computer',
+    back: '← Back to the studio', modelH: 'The model',
+    ready: 'Ready — Nimbus 1.1 Prime-EE is answering on this computer',
+    loading: 'Loading the model into memory…', missing: 'No model downloaded yet',
+    failed: 'The model could not start', buildsH: 'Choose a size and download it',
+    buildsLead: 'Downloaded once, straight from the Qwen repository on Hugging Face, and checked against its published checksum. The Nimbus adapter is already inside the app. You can keep more than one.',
+    download: 'Download', resume: 'Resume', cancel: 'Cancel', use: 'Use this', inUse: 'In use',
+    delete: 'Delete', installed: 'Downloaded', partial: 'Partly downloaded',
+    ramWarn: 'more memory than this computer has', left: 'left', verifying: 'Checking the file…',
+    machineH: 'This computer', system: 'System', cpus: 'Processors', memory: 'Memory',
+    disk: 'Free disk', models: 'Models folder', openModels: 'Open the models folder',
+    openFiles: 'Open the files folder', start: 'Open the studio →',
+    confirmDelete: 'Delete this download? You can download it again later.',
+    noAdapter: 'The Nimbus adapter is missing from this installation. Reinstall the app.',
+  },
+  fa: {
+    title: 'اهوس‌ای‌آی استودیو', subtitle: 'آفلاین — مدل روی همین کامپیوتر اجرا می‌شود',
+    back: '→ بازگشت به استودیو', modelH: 'مدل',
+    ready: 'آماده — نیمبوس ۱.۱ پرایم روی همین کامپیوتر پاسخ می‌دهد',
+    loading: 'در حال بارگذاری مدل در حافظه…', missing: 'هنوز مدلی دانلود نشده',
+    failed: 'مدل اجرا نشد', buildsH: 'یک اندازه انتخاب و دانلود کنید',
+    buildsLead: 'یک بار دانلود می‌شود، مستقیم از مخزن Qwen در هاگینگ‌فیس، و با چک‌سام منتشرشده‌اش بررسی می‌شود. آداپتر نیمبوس از قبل داخل برنامه است. می‌توانید بیش از یکی نگه دارید.',
+    download: 'دانلود', resume: 'ادامه‌ی دانلود', cancel: 'لغو', use: 'استفاده از این', inUse: 'در حال استفاده',
+    delete: 'حذف', installed: 'دانلودشده', partial: 'نیمه‌کاره',
+    ramWarn: 'حافظه‌ای بیشتر از این کامپیوتر می‌خواهد', left: 'مانده', verifying: 'در حال بررسی فایل…',
+    machineH: 'این کامپیوتر', system: 'سیستم', cpus: 'پردازنده', memory: 'حافظه',
+    disk: 'فضای آزاد', models: 'پوشه‌ی مدل‌ها', openModels: 'باز کردن پوشه‌ی مدل‌ها',
+    openFiles: 'باز کردن پوشه‌ی فایل‌ها', start: 'ورود به استودیو ←',
+    confirmDelete: 'این دانلود حذف شود؟ بعداً دوباره می‌توانید دانلودش کنید.',
+    noAdapter: 'آداپتر نیمبوس در این نصب نیست. برنامه را دوباره نصب کنید.',
+  },
+};
+
+let lang = 'en';
+try { const saved = localStorage.getItem('language'); if (saved === 'fa' || saved === 'en') lang = saved; } catch (e) {}
+const t = key => T[lang][key] || T.en[key] || key;
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const digits = s => lang === 'fa' ? String(s).replace(/\d/g, d => '۰۱۲۳۴۵۶۷۸۹'[d]).replace(/\./g, '٫') : String(s);
+const gb = bytes => digits((bytes / 1e9).toFixed(2)) + (lang === 'fa' ? ' گیگابایت' : ' GB');
+
+function setLang(next) {
+  lang = next;
+  document.documentElement.lang = lang;
+  document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr';
+  document.querySelectorAll('[data-t]').forEach(el => { el.textContent = t(el.dataset.t); });
+  document.querySelectorAll('.lang button').forEach(b => b.classList.toggle('on', b.dataset.lang === lang));
+  try { localStorage.setItem('language', lang); } catch (e) {}
+  if (last) paint(last);
+}
+document.querySelectorAll('.lang button').forEach(b => b.onclick = () => setLang(b.dataset.lang));
+try { document.body.dataset.theme = localStorage.getItem('theme') || 'light'; } catch (e) {}
+
+async function call(path) {
+  const response = await fetch(path, { method: 'POST' });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) alert(body.detail || ('Error ' + response.status));
+  return body;
+}
+
+let last = null;
+
+function paint(s) {
+  last = s;
+  const state = $('#state');
+  state.className = 'state ' + s.state;
+  $('#stateText').textContent = s.adapter ? t(s.state) : t('noAdapter');
+  $('#log').textContent = s.state === 'failed' ? (s.error || s.log || '') : '';
+  $('#start').hidden = s.state !== 'ready' && s.state !== 'loading';
+  $('#back').hidden = !s.current;
+
+  const ram = s.machine.ram_bytes / 1e9;
+  const dl = s.download && s.download.state === 'running' ? s.download : null;
+  $('#builds').innerHTML = s.builds.map(b => {
+    const running = dl && dl.build === b.key;
+    const tags = [];
+    if (b.key === s.current && b.installed) tags.push(`<span class="tag on">${t('inUse')}</span>`);
+    else if (b.installed) tags.push(`<span class="tag">${t('installed')}</span>`);
+    else if (b.partial_bytes && !running) tags.push(`<span class="tag">${t('partial')} · ${gb(b.partial_bytes)}</span>`);
+    if (ram && b.ram_hint_gb > ram + 0.5) tags.push(`<span class="tag warn">${t('ramWarn')}</span>`);
+
+    const acts = [];
+    if (running) acts.push(`<button class="btn" data-act="cancel">${t('cancel')}</button>`);
+    else if (!b.installed) acts.push(`<button class="btn primary" data-act="download" data-build="${b.key}" ${dl ? 'disabled' : ''}>${b.partial_bytes ? t('resume') : t('download')}</button>`);
+    else {
+      if (b.key !== s.current) acts.push(`<button class="btn primary" data-act="use" data-build="${b.key}">${t('use')}</button>`);
+      if (b.key !== s.current || s.state === 'failed') acts.push(`<button class="btn" data-act="delete" data-build="${b.key}">${t('delete')}</button>`);
+    }
+
+    let progress = '';
+    if (running) {
+      const share = dl.total ? dl.done / dl.total : 0;
+      const checking = share >= 1;
+      const left = dl.seconds_left ? Math.round(dl.seconds_left / 60) : null;
+      progress = `<div class="progress"><div class="track"><div class="fill" style="width:${(share * 100).toFixed(1)}%"></div></div>
+        <div class="nums"><span>${checking ? t('verifying') : gb(dl.done) + ' / ' + gb(dl.total)}</span>
+        <span>${checking ? '' : digits((dl.speed / 1e6).toFixed(2)) + ' MB/s' + (left !== null ? ' · ' + digits(left) + 'm ' + t('left') : '')}</span></div></div>`;
+    }
+    const failed = s.download && s.download.build === b.key && s.download.state === 'failed'
+      ? `<div class="error">${esc(s.download.error)}</div>` : '';
+
+    return `<div class="build">
+      <div class="name">${gb(b.bytes)}<span class="key">${b.key}</span></div>
+      <div class="acts">${tags.join('')}${acts.join('')}</div>
+      <div class="desc">${esc(lang === 'fa' ? b.label_fa : b.label_en)}</div>
+      ${progress}${failed}
+    </div>`;
+  }).join('');
+
+  const m = s.machine;
+  $('#facts').innerHTML = `
+    <dt>${t('system')}</dt><dd>${esc(m.system)} ${esc(m.machine)}</dd>
+    <dt>${t('cpus')}</dt><dd>${digits(m.cpus)}</dd>
+    <dt>${t('memory')}</dt><dd>${gb(m.ram_bytes)}</dd>
+    <dt>${t('disk')}</dt><dd>${gb(m.free_disk_bytes)}</dd>
+    <dt>${t('models')}</dt><dd>${esc(s.paths.models)}</dd>`;
+}
+
+$('#builds').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  const act = b.dataset.act, build = b.dataset.build;
+  if (act === 'delete' && !confirm(t('confirmDelete'))) return;
+  const path = act === 'cancel' ? '/local/setup/cancel' : `/local/setup/${act}?build=${encodeURIComponent(build)}`;
+  paint(await call(path));
+});
+document.querySelectorAll('[data-open]').forEach(b =>
+  b.onclick = () => call('/local/open-folder?which=' + b.dataset.open));
+$('#start').onclick = () => { location.href = 'index.html'; };
+
+/* Polled rather than pushed: the page is open for minutes at most, and a
+   one-second poll of a local server is cheaper to reason about than a socket. */
+async function poll() {
+  try {
+    const response = await fetch('/local/status');
+    paint(await response.json());
+  } catch (e) { /* the app is closing */ }
+  setTimeout(poll, 1000);
+}
+setLang(lang);
+poll();
+</script>
+</body>
+</html>

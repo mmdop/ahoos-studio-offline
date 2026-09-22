@@ -87,6 +87,13 @@ jobs:
         with:
           path: packages
           merge-multiple: true
+      # The README and the site both tell people to check their download
+      # against a published checksum; this is where it is published.
+      - name: Checksums
+        run: |
+          cd packages
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
           files: packages/*

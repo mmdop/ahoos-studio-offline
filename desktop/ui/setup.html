@@ -53,6 +53,22 @@ pre.log:empty{display:none}
 .build{display:grid;grid-template-columns:1fr auto;gap:6px 14px;align-items:center;
   padding:14px 0;border-top:1px solid var(--line)}
 .build:first-of-type{border-top:0}
+/* One model per group. Shut, it says how much of it is here; open, it is the
+   list that was there before. <details> so the browser keeps the state and the
+   keyboard reaches it without a line of script. */
+.group{border-top:1px solid var(--line)}
+.group:first-of-type{border-top:0}
+.group>summary{display:flex;align-items:center;gap:10px;padding:14px 2px;cursor:pointer;
+  list-style:none;font-size:15.5px}
+.group>summary::-webkit-details-marker{display:none}
+.group>summary:hover .gname{color:var(--accent)}
+.gname{font-weight:640}
+.gnote{margin-inline-start:auto;color:var(--muted);font-size:13px}
+.chev{color:var(--muted);flex-shrink:0;transition:transform .18s ease}
+.group[open]>summary .chev{transform:rotate(180deg)}
+.gbody{padding-block-end:6px}
+.gbody .build:first-of-type{border-top:1px solid var(--line)}
+@media (prefers-reduced-motion:reduce){.chev{transition:none}}
 .build .name{font-weight:600}
 .build .name .key{font:500 12.5px var(--mono);color:var(--muted);margin-inline-start:8px}
 .build .desc{color:var(--muted);font-size:13.5px;grid-column:1}
@@ -139,9 +155,11 @@ const T = {
   en: {
     title: 'AhoosAI Studio', subtitle: 'Offline — the model runs on this computer',
     back: '← Back to the studio', modelH: 'The model',
-    ready: 'Ready — Nimbus 1.1 Prime-EE is answering on this computer',
+    ready: 'Ready — {model} is answering on this computer',
     loading: 'Loading the model into memory…', missing: 'No model downloaded yet',
     failed: 'The model could not start', buildsH: 'Choose a size and download it',
+    downloading: 'downloading', oneHere: 'size on this computer',
+    manyHere: 'sizes on this computer', noneHere: 'nothing downloaded yet',
     buildsLead: 'Downloaded once, straight from the Qwen repository on Hugging Face, and checked against its published checksum. The Nimbus adapter is already inside the app. You can keep more than one.',
     download: 'Download', resume: 'Resume', cancel: 'Cancel', use: 'Use this', inUse: 'In use',
     delete: 'Delete', installed: 'Downloaded', partial: 'Partly downloaded',
@@ -155,9 +173,11 @@ const T = {
   fa: {
     title: 'اهوس‌ای‌آی استودیو', subtitle: 'آفلاین — مدل روی همین کامپیوتر اجرا می‌شود',
     back: '→ بازگشت به استودیو', modelH: 'مدل',
-    ready: 'آماده — نیمبوس ۱.۱ پرایم روی همین کامپیوتر پاسخ می‌دهد',
+    ready: 'آماده — {model} روی همین کامپیوتر پاسخ می‌دهد',
     loading: 'در حال بارگذاری مدل در حافظه…', missing: 'هنوز مدلی دانلود نشده',
     failed: 'مدل اجرا نشد', buildsH: 'یک اندازه انتخاب و دانلود کنید',
+    downloading: 'در حال دانلود', oneHere: 'اندازه روی این کامپیوتر',
+    manyHere: 'اندازه روی این کامپیوتر', noneHere: 'هنوز چیزی دانلود نشده',
     buildsLead: 'یک بار دانلود می‌شود، مستقیم از مخزن Qwen در هاگینگ‌فیس، و با چک‌سام منتشرشده‌اش بررسی می‌شود. آداپتر نیمبوس از قبل داخل برنامه است. می‌توانید بیش از یکی نگه دارید.',
     download: 'دانلود', resume: 'ادامه‌ی دانلود', cancel: 'لغو', use: 'استفاده از این', inUse: 'در حال استفاده',
     delete: 'حذف', installed: 'دانلودشده', partial: 'نیمه‌کاره',
@@ -199,18 +219,25 @@ async function call(path) {
 
 let last = null;
 
+let openGroups = null;        // model ids the person has open; decided once, then theirs
+let buildsSignature = '';     // what the list was last drawn from
+
 function paint(s) {
   last = s;
   const state = $('#state');
   state.className = 'state ' + s.state;
-  $('#stateText').textContent = s.adapter ? t(s.state) : t('noAdapter');
+  // The name comes from the model that is running, so a page open while the
+  // person switches models does not keep naming the one they left.
+  $('#stateText').textContent = s.adapter
+    ? t(s.state).replace('{model}', s.model_name || '')
+    : t('noAdapter');
   $('#log').textContent = s.state === 'failed' ? (s.error || s.log || '') : '';
   $('#start').hidden = s.state !== 'ready' && s.state !== 'loading';
   $('#back').hidden = !s.current;
 
   const ram = s.machine.ram_bytes / 1e9;
   const dl = s.download && s.download.state === 'running' ? s.download : null;
-  $('#builds').innerHTML = s.builds.map(b => {
+  const buildHtml = b => {
     const running = dl && dl.build === b.key;
     const tags = [];
     if (b.key === s.current && b.installed) tags.push(`<span class="tag on">${t('inUse')}</span>`);
@@ -244,8 +271,61 @@ function paint(s) {
       <div class="desc">${esc(lang === 'fa' ? b.label_fa : b.label_en)}</div>
       ${progress}${failed}
     </div>`;
+  };
+
+  // Grouped by model, because six sizes in one list said nothing about which
+  // three belonged to which model -- and the two do not substitute for each
+  // other. The group a person is using opens; the other stays shut until they
+  // want it, and says from the outside whether anything in it is downloaded.
+  const models = s.models && s.models.length ? s.models
+    : [{ id: '', name: '', active: true }];
+
+  // Which groups are open is the person's business, not the poll's. It was
+  // decided once, from the model in use, and after that only they change it --
+  // otherwise the group they just shut springs open a second later, and the
+  // one they just opened shuts.
+  if (openGroups === null) {
+    openGroups = new Set(models.filter(m => m.active).map(m => m.id));
+    if (!openGroups.size && models[0]) openGroups.add(models[0].id);
+  }
+  if (dl) {
+    const busyModel = (s.builds.find(b => b.key === dl.build) || {}).model;
+    if (busyModel) openGroups.add(busyModel);       // a download must be visible
+  }
+
+  // Rebuilding the list under someone's cursor once a second loses a hover, a
+  // focus ring and a half-pressed button. Nothing is redrawn while nothing has
+  // changed.
+  const signature = JSON.stringify([s.builds, s.current, s.model, s.download,
+                                    [...openGroups].sort(), lang]);
+  if (signature === buildsSignature) return paintFacts(s);
+  buildsSignature = signature;
+
+  $('#builds').innerHTML = models.map(m => {
+    const mine = s.builds.filter(b => !m.id || b.model === m.id);
+    if (!mine.length) return '';
+    const here = mine.filter(b => b.installed).length;
+    const busy = dl && mine.some(b => b.key === dl.build);
+    const open = openGroups.has(m.id);
+    const note = busy ? t('downloading')
+      : here ? `${digits(here)} ${here === 1 ? t('oneHere') : t('manyHere')}`
+             : t('noneHere');
+    return `<details class="group" data-model="${esc(m.id)}"${open ? ' open' : ''}>
+      <summary>
+        <span class="gname">${esc(m.name)}</span>
+        ${m.active ? `<span class="tag on">${t('inUse')}</span>` : ''}
+        <span class="gnote">${note}</span>
+        <svg class="chev" width="15" height="15" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+      </summary>
+      <div class="gbody">${mine.map(buildHtml).join('')}</div>
+    </details>`;
   }).join('');
 
+  paintFacts(s);
+}
+
+function paintFacts(s) {
   const m = s.machine;
   $('#facts').innerHTML = `
     <dt>${t('system')}</dt><dd>${esc(m.system)} ${esc(m.machine)}</dd>
@@ -254,6 +334,13 @@ function paint(s) {
     <dt>${t('disk')}</dt><dd>${gb(m.free_disk_bytes)}</dd>
     <dt>${t('models')}</dt><dd>${esc(s.paths.models)}</dd>`;
 }
+
+$('#builds').addEventListener('toggle', e => {
+  const group = e.target.closest && e.target.closest('details.group');
+  if (!group || !openGroups) return;
+  if (group.open) openGroups.add(group.dataset.model);
+  else openGroups.delete(group.dataset.model);
+}, true);
 
 $('#builds').addEventListener('click', async e => {
   const b = e.target.closest('button[data-act]');

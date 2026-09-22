@@ -24,7 +24,10 @@ IS_WIN = os.name == "nt"
 
 datas = [
     (str(ROOT / "desktop" / "ui"), "ui"),
+    # Both adapters travel with the program. They are ours and small beside
+    # the base, so one download for the person instead of three.
     (str(ROOT / "desktop" / "assets" / "nimbus-1-1-prime-ee.gguf"), "assets"),
+    (str(ROOT / "desktop" / "assets" / "nimbus-2-apex.gguf"), "assets"),
     (str(ROOT / "desktop" / "assets" / "icon.png"), "assets"),
     (str(ROOT / "desktop" / "assets" / "icon.ico"), "assets"),
     (str(FAMILY), "family"),

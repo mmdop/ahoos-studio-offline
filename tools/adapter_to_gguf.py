@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import struct
 import sys
 import urllib.request
@@ -127,13 +128,19 @@ def convert(adapter_dir: Path, out: Path) -> Path:
     config = json.loads((adapter_dir / "adapter_config.json").read_text(encoding="utf-8"))
     base_config = json.loads((adapter_dir / "base_config.json").read_text(encoding="utf-8"))
 
+    # Qwen2 and Qwen3 are both here because both bases are shipped, and each one
+    # is named rather than guessed: `general.architecture` has to match the base
+    # or llama.cpp refuses the file, and a mapping written for the wrong family
+    # produces a file that loads and generates noise.
+    ARCHES = {"Qwen2ForCausalLM": gguf.MODEL_ARCH.QWEN2,
+              "Qwen3ForCausalLM": gguf.MODEL_ARCH.QWEN3}
     architectures = base_config.get("architectures") or []
-    if architectures != ["Qwen2ForCausalLM"]:
+    if len(architectures) != 1 or architectures[0] not in ARCHES:
         raise SystemExit(
             f"the base model reports {architectures}, which this converter has not been "
-            "checked against. The tensor mapping below is Qwen2's."
+            f"checked against. It knows {', '.join(ARCHES)}."
         )
-    arch = gguf.MODEL_ARCH.QWEN2
+    arch = ARCHES[architectures[0]]
     block_count = int(base_config["num_hidden_layers"])
     alpha = float(config["lora_alpha"])
 
@@ -191,15 +198,27 @@ def main() -> int:
     parser.add_argument("--out", type=Path,
                         default=Path(__file__).resolve().parents[1] / "desktop" / "assets"
                         / "nimbus-1-1-prime-ee.gguf")
+    parser.add_argument("--adapter-dir", type=Path,
+                        help="a PEFT folder already on disk, instead of the Hub. "
+                             "Nimbus 2 Apex lives in a GitHub release, not on the Hub.")
+    parser.add_argument("--base-repo", default=BASE_REPO,
+                        help="whose config.json says which architecture this adapts")
     args = parser.parse_args()
 
     args.work.mkdir(parents=True, exist_ok=True)
-    fetch(HUB % (ADAPTER_REPO, "adapter_config.json"), args.work / "adapter_config.json")
-    fetch(HUB % (ADAPTER_REPO, "adapter_model.safetensors"), args.work / "adapter_model.safetensors",
-          size=ADAPTER_BYTES, sha256=ADAPTER_SHA)
+    if args.adapter_dir:
+        source = args.adapter_dir
+        for name in ("adapter_config.json", "adapter_model.safetensors"):
+            if not (source / name).is_file():
+                raise SystemExit(f"{source / name} is missing")
+            shutil.copyfile(source / name, args.work / name)
+    else:
+        fetch(HUB % (ADAPTER_REPO, "adapter_config.json"), args.work / "adapter_config.json")
+        fetch(HUB % (ADAPTER_REPO, "adapter_model.safetensors"), args.work / "adapter_model.safetensors",
+              size=ADAPTER_BYTES, sha256=ADAPTER_SHA)
     # Only the base model's config, never its weights: this needs the
     # architecture and the layer count, which are two numbers in a small file.
-    fetch(HUB % (BASE_REPO, "config.json"), args.work / "base_config.json")
+    fetch(HUB % (args.base_repo, "config.json"), args.work / "base_config.json")
 
     convert(args.work, args.out)
     return 0

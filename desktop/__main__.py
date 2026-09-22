@@ -139,30 +139,37 @@ def cmd_fetch_runtime(args) -> int:
 
 
 def cmd_verify_catalogue(args) -> int:
-    """Ask the Hub what it actually has, and say where we disagree."""
-    wanted = {b.filename: b for b in catalogue.BUILDS}
-    body = json.dumps({"paths": list(wanted)}).encode()
-    request = urllib.request.Request(
-        f"https://huggingface.co/api/models/{catalogue.BASE_REPO}/paths-info/main",
-        data=body, headers={"Content-Type": "application/json", "User-Agent": "AhoosAI"})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        live = json.loads(response.read())
+    """Ask the Hub what it actually has, and say where we disagree.
 
+    One request per base repository, because each model's builds live in its
+    own -- and a size that is a few hundred bytes out is a download the app
+    would reject as damaged."""
     wrong = 0
-    for entry in live:
-        build = wanted.pop(entry["path"], None)
-        if build is None:
+    for model in catalogue.MODELS:
+        wanted = {b.filename: b for b in catalogue.builds_for(model.id)}
+        if not wanted:
             continue
-        size = entry.get("size", 0)
-        sha = (entry.get("lfs") or {}).get("oid", "")
-        ok = size == build.bytes and sha == build.sha256
-        wrong += 0 if ok else 1
-        print(f"  {'ok  ' if ok else 'DIFF'} {build.key:<8} {size:>13,}  {sha[:16]}")
-        if not ok:
-            print(f"       catalogue says {build.bytes:>13,}  {build.sha256[:16]}")
-    for missing in wanted:
-        wrong += 1
-        print(f"  GONE {missing} is no longer in {catalogue.BASE_REPO}")
+        print(f"{model.name}  <-  {model.base_repo}")
+        body = json.dumps({"paths": list(wanted)}).encode()
+        request = urllib.request.Request(
+            f"https://huggingface.co/api/models/{model.base_repo}/paths-info/main",
+            data=body, headers={"Content-Type": "application/json", "User-Agent": "AhoosAI"})
+        with urllib.request.urlopen(request, timeout=60) as response:
+            live = json.loads(response.read())
+        for entry in live:
+            build = wanted.pop(entry["path"], None)
+            if build is None:
+                continue
+            size = entry.get("size", 0)
+            sha = (entry.get("lfs") or {}).get("oid", "")
+            ok = size == build.bytes and sha == build.sha256
+            wrong += 0 if ok else 1
+            print(f"  {'ok  ' if ok else 'DIFF'} {build.key:<12} {size:>13,}  {sha[:16]}")
+            if not ok:
+                print(f"       catalogue says {build.bytes:>13,}  {build.sha256[:16]}")
+        for missing in wanted:
+            wrong += 1
+            print(f"  GONE {missing} is no longer in {model.base_repo}")
 
     print("catalogue matches the Hub" if not wrong else f"{wrong} entries need updating")
     return 0 if not wrong else 1
@@ -180,8 +187,10 @@ def cmd_pull(args) -> int:
         print(f"\n  {exc}")
         return 1
     print(f"in {where}")
-    if not catalogue.adapter_path().is_file():
-        print("adapter  missing from the app -- build it with: python tools/adapter_to_gguf.py")
+    adapter = catalogue.adapter_path(build.model)
+    if not adapter.is_file():
+        print(f"adapter  {adapter.name} missing from the app -- "
+              "build it with: python tools/adapter_to_gguf.py")
         return 1
     return 0
 
@@ -197,15 +206,17 @@ def cmd_doctor(args) -> int:
 
     where = models_dir()
     print(f"models    {where}")
-    for build in catalogue.BUILDS:
-        path = where / build.filename
-        if path.is_file():
-            complete = path.stat().st_size == build.bytes
-            print(f"  {'ok  ' if complete else 'PART'} {build.key:<8} {build.filename}")
-        else:
-            print(f"  --   {build.key:<8} not downloaded")
-    adapter = catalogue.adapter_path()
-    print(f"  {'ok  ' if adapter.is_file() else '--  '} adapter  {adapter}")
+    for model in catalogue.MODELS:
+        print(f"  {model.name}")
+        for build in catalogue.builds_for(model.id):
+            path = where / build.filename
+            if path.is_file():
+                complete = path.stat().st_size == build.bytes
+                print(f"    {'ok  ' if complete else 'PART'} {build.key:<12} {build.filename}")
+            else:
+                print(f"    --   {build.key:<12} not downloaded")
+        adapter = catalogue.adapter_path(model.id)
+        print(f"    {'ok  ' if adapter.is_file() else '--  '} adapter      {adapter.name}")
     return 0
 
 

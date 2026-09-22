@@ -52,8 +52,13 @@ sys.path.insert(0, str(ROOT))
 from desktop import __main__ as cli  # noqa: E402
 from desktop import catalogue, family  # noqa: E402
 
-VERSION = "1.1.0"
+VERSION = "2.0.0"
 NAME = "AhoosAI Studio"
+
+# Nimbus 2 Apex's adapter, exactly as published on the Hub.
+APEX_GGUF_URL = "https://huggingface.co/AhoosAI/nimbus-2-apex/resolve/main/nimbus-2-apex.gguf"
+APEX_GGUF_BYTES = 174_622_368
+APEX_GGUF_SHA256 = "21e406daa25dd46f464b0c2204f9aca268f41ef74c1d046c767d67255a30a485"
 
 
 def step(title: str) -> None:
@@ -126,12 +131,24 @@ def main() -> int:
     elif not (ROOT / "desktop/ui/index.html").is_file():
         raise SystemExit("interface: desktop/ui/index.html is missing")
 
-    step("adapter")
-    if not catalogue.adapter_path().is_file():
-        # Read-only against the Hub: it downloads the published PEFT weights and
-        # converts them here. Nothing is uploaded anywhere.
-        run(sys.executable, "tools/adapter_to_gguf.py")
-    print(f"  {catalogue.adapter_path().stat().st_size / 1e6:.1f} MB")
+    step("adapters")
+    # One per model, and both have to be here: a package missing an adapter
+    # starts, looks fine, and fails on the first message to that model.
+    for model in catalogue.MODELS:
+        path = catalogue.adapter_path(model.id)
+        if not path.is_file():
+            if model.id == "nimbus-1.1-prime-ee":
+                # Read-only against the Hub: it downloads the published PEFT
+                # weights and converts them here. Nothing is uploaded anywhere.
+                run(sys.executable, "tools/adapter_to_gguf.py")
+            else:
+                # Published as a GGUF beside the PEFT weights, so it is fetched
+                # as it is rather than converted -- and pinned, so a changed
+                # file on the Hub stops the build instead of shipping quietly.
+                from desktop.download import fetch
+
+                fetch(APEX_GGUF_URL, path, expected_bytes=APEX_GGUF_BYTES, sha256=APEX_GGUF_SHA256)
+        print(f"  {model.name:<22} {path.stat().st_size / 1e6:6.1f} MB  {path.name}")
 
     step("icons")
     missing = [n for n in ("icon.png", "icon.ico", "icon.icns") if not (ROOT / "desktop/assets" / n).is_file()]

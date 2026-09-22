@@ -1,0 +1,173 @@
+/* ---------------------------------------------------------------------------
+   What the desktop has that the web studio does not: the two dials of Nimbus 2
+   Apex, a working folder, a gate in front of anything that touches it, and a
+   shell.
+
+   The app's visual law is already written at the top of index.html -- type,
+   space and one rule weight, no gradients and no glow -- and every colour here
+   is one of its tokens, so these controls look like they were always in it.
+
+   The thermometer is the one exception, and it earns it: it is the only control
+   on screen that shows a physical quantity, so it is drawn as the instrument
+   that shows that quantity. The colour of the column is the reading, not
+   decoration -- cold at 1, warm at 10 -- and it is set from JavaScript one step
+   at a time rather than as a gradient across the whole tube, because a gradient
+   would show every temperature at once.
+   --------------------------------------------------------------------------- */
+
+/* ---- the thermometer ---------------------------------------------------- */
+
+.therm-pop{ padding:14px 16px 12px; min-width:232px }
+.therm-wrap{ display:flex; gap:16px; align-items:stretch }
+
+/* The glass: a tube with a bulb at the foot, drawn with borders and radii
+   rather than an image, so it takes the theme's line colour with everything
+   else. 148px because ten detents need room to be countable. */
+.therm{ position:relative; width:30px; height:148px; flex-shrink:0;
+        display:flex; flex-direction:column; align-items:center;
+        cursor:ns-resize; touch-action:none; user-select:none }
+.therm-tube{ position:relative; width:14px; flex:1; border:1px solid var(--line);
+             border-bottom:0; border-radius:7px 7px 0 0; background:var(--panel-2);
+             overflow:hidden }
+.therm-fill{ position:absolute; inset:auto 0 0 0; height:0;
+             background:var(--therm); transition:height .16s ease, background .16s ease }
+.therm-bulb{ position:relative; width:30px; height:30px; margin-top:-2px; border-radius:50%;
+             border:1px solid var(--line); background:var(--therm);
+             display:grid; place-items:center; color:#fff;
+             font:700 13px/1 var(--font); transition:background .16s ease }
+[data-theme="dark"] .therm-bulb{ color:#0b0b0b }
+.therm:focus-visible{ outline:none }
+.therm:focus-visible .therm-tube,
+.therm:focus-visible .therm-bulb{ border-color:var(--accent) }
+
+/* The detents. Every second one is long and carries its number, which is what
+   makes the scale readable without labelling all ten. */
+.therm-scale{ display:flex; flex-direction:column; justify-content:space-between;
+              padding:3px 0 16px; font:11px/1 var(--font); color:var(--muted) }
+.therm-scale span{ display:flex; align-items:center; gap:6px; height:0 }
+.therm-scale span::before{ content:""; width:6px; height:1px; background:var(--line) }
+.therm-scale span.major::before{ width:10px; background:var(--line) }
+.therm-scale span.on{ color:var(--ink); font-weight:650 }
+
+.therm-read{ flex:1; display:flex; flex-direction:column; gap:2px; min-width:0 }
+.therm-read b{ font-size:13.5px; font-weight:650 }
+.therm-read .sub{ font-size:12px; color:var(--muted); line-height:1.5 }
+.therm-read .num{ font:600 12px/1.5 var(--mono); color:var(--muted) }
+
+@media (prefers-reduced-motion:reduce){
+  .therm-fill,.therm-bulb{ transition:none }
+}
+
+/* ---- the thinking ladder, 1 to 20 -------------------------------------- */
+
+.ladder-pop{ padding:14px 16px 12px; min-width:268px }
+.ladder-head{ display:flex; align-items:baseline; justify-content:space-between; gap:10px }
+.ladder-head b{ font-size:13.5px; font-weight:650 }
+.ladder-head .lvl{ font:700 15px/1 var(--mono); color:var(--accent-ink) }
+.ladder-sub{ font-size:12px; color:var(--muted); margin:2px 0 11px; line-height:1.5 }
+.ladder input[type=range]{ width:100%; margin:0; accent-color:var(--accent) }
+/* Twenty ticks would be a smear, so five are drawn and the rest are felt. */
+.ladder-ticks{ display:flex; justify-content:space-between; font:11px/1 var(--mono);
+               color:var(--muted); margin-top:6px }
+
+/* ---- plan against normal ----------------------------------------------- */
+
+/* A fixed width, because `flex:1` only shares space that is left over and two
+   words of different lengths leave none -- so the halves came out 65 and 46,
+   and a slide of exactly half the track landed between them. */
+.mode{ position:relative; display:flex; width:136px; background:var(--panel-2);
+       padding:2px; border-radius:8px }
+.mode button{ position:relative; z-index:1; flex:1; min-width:0; padding:4px 0; border-radius:6px;
+              font-size:12.5px; font-weight:560; color:var(--muted); line-height:1.5;
+              text-align:center; white-space:nowrap; transition:color .18s ease }
+.mode button.on{ color:var(--ink) }
+.mode-slide{ position:absolute; top:2px; bottom:2px; left:2px; width:calc(50% - 2px);
+             border-radius:6px; background:var(--panel); box-shadow:var(--shadow);
+             transition:transform .22s cubic-bezier(.32,.72,0,1) }
+.mode[data-mode="plan"] .mode-slide{ transform:translateX(100%) }
+
+@media (prefers-reduced-motion:reduce){
+  .mode-slide,.mode button{ transition:none }
+}
+
+/* ---- the model picker: one line each ----------------------------------- */
+
+.pop .pick{ display:flex; align-items:center; justify-content:space-between; gap:12px;
+            width:100%; padding:8px 12px; border-radius:8px; font-size:13.5px;
+            white-space:nowrap; text-align:left }
+.pop .pick:hover:not(:disabled){ background:var(--panel-2) }
+.pop .pick .nm{ font-weight:560; color:var(--ink) }
+.pop .pick:disabled{ opacity:1; cursor:default }
+.pop .pick .st{ width:13px; height:13px; flex-shrink:0; color:var(--muted) }
+/* In use: a filled dot, and nothing written. The name is already there. */
+.pop .pick .st.on{ border-radius:50%; background:var(--accent); box-shadow:0 0 0 3px var(--accent-soft) }
+.pop .pick .st.dl{ opacity:.55 }
+
+/* ---- the working folder, in the bar ------------------------------------ */
+
+.folder{ display:flex; align-items:center; gap:7px; max-width:320px; min-width:0;
+         padding:5px 9px; border:1px solid var(--line); border-radius:8px;
+         font-size:12.5px; color:var(--muted); background:var(--panel) }
+.folder b{ color:var(--ink); font-weight:560; overflow:hidden; text-overflow:ellipsis;
+           white-space:nowrap; direction:ltr }
+.folder.none{ border-style:dashed }
+.folder button{ color:var(--accent-ink); font-size:12.5px; font-weight:560; flex-shrink:0 }
+
+/* ---- the gate ----------------------------------------------------------- */
+
+/* Not a dialog. A dialog trains a person to dismiss it; this sits in the
+   conversation where the action was asked for, and stays there afterwards as
+   the record of what was allowed. */
+.ask{ border:1px solid var(--accent); border-radius:12px; background:var(--panel);
+      padding:13px 15px; margin:10px 0; max-width:min(680px,92%) }
+.ask-h{ display:flex; align-items:center; gap:8px; font-size:13px; font-weight:650 }
+.ask-h svg{ color:var(--accent-ink); flex-shrink:0 }
+.ask-what{ margin:9px 0 11px; padding:9px 11px; border-radius:8px; background:var(--code-bg);
+           border:1px solid var(--line); font:12.5px/1.6 var(--mono);
+           white-space:pre-wrap; word-break:break-word; direction:ltr; text-align:left }
+.ask-row{ display:flex; gap:8px; flex-wrap:wrap }
+.ask-row button{ padding:7px 13px; border-radius:8px; font-size:13px; font-weight:600;
+                 border:1px solid var(--line) }
+.ask-row .yes{ background:var(--accent); color:#fff; border-color:transparent }
+.ask-row .once{ background:var(--panel-2) }
+.ask-row .no{ background:var(--panel-2) }
+.ask.settled{ border-color:var(--line) }
+.ask.settled .ask-row{ display:none }
+.ask-said{ display:none; font-size:12.5px; color:var(--muted) }
+.ask.settled .ask-said{ display:block }
+
+/* ---- the terminal ------------------------------------------------------- */
+
+#term{ display:none; flex-direction:column; border-top:1px solid var(--line);
+       background:var(--code-bg); height:260px; flex-shrink:0 }
+#term.on{ display:flex }
+.term-bar{ display:flex; align-items:center; gap:10px; padding:7px 12px;
+           border-bottom:1px solid var(--line); background:var(--panel);
+           font-size:12.5px; color:var(--muted) }
+.term-bar .where{ font:12px/1.5 var(--mono); color:var(--ink); overflow:hidden;
+                  text-overflow:ellipsis; white-space:nowrap; direction:ltr; flex:1 }
+.term-bar button{ font-size:12.5px; color:var(--accent-ink); font-weight:560; flex-shrink:0 }
+.term-out{ flex:1; overflow:auto; padding:10px 12px; font:12.5px/1.65 var(--mono);
+           white-space:pre-wrap; word-break:break-word; direction:ltr; text-align:left }
+.term-out .cmd{ color:var(--accent-ink); font-weight:600 }
+.term-out .bad{ color:#c0392b }
+[data-theme="dark"] .term-out .bad{ color:#ff7b6b }
+.term-out .code{ color:var(--muted) }
+.term-in{ display:flex; align-items:center; gap:8px; padding:8px 12px;
+          border-top:1px solid var(--line); background:var(--panel) }
+.term-in span{ font:13px/1 var(--mono); color:var(--muted) }
+.term-in input{ flex:1; border:0; background:none; color:var(--ink);
+                font:12.5px/1.6 var(--mono); outline:none; direction:ltr }
+
+/* ---- the reasoning, while it is being written -------------------------- */
+
+/* The stage already exists in the page; this is what goes inside it when the
+   model is thinking out loud. Clamped, because a level-20 answer thinks for
+   two thousand words and the answer is what the person is waiting for. */
+.apex-think{ margin-top:7px; max-height:132px; overflow:auto; padding:8px 10px;
+             border-radius:8px; background:var(--panel-2); border:1px solid var(--line);
+             font-size:12.5px; line-height:1.6; color:var(--muted);
+             white-space:pre-wrap; word-break:break-word }
+.apex-count{ font:11.5px/1 var(--mono); color:var(--muted); margin-top:6px }
+.apex-count.over{ color:#c0392b }
+[data-theme="dark"] .apex-count.over{ color:#ff7b6b }

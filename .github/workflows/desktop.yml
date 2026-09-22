@@ -1,0 +1,93 @@
+# The offline studio, built on each platform it runs on.
+#
+# PyInstaller freezes the interpreter it runs under and llama.cpp's binaries are
+# per platform, so nothing here is cross-built: each job runs
+# desktop/packaging/build.py on its own operating system.
+#
+# Run by hand from the Actions tab, or by pushing a tag like v2.0.0 --
+# which also attaches the three packages to a GitHub release.
+#
+# Nothing here writes to Hugging Face. Nimbus 1.1's adapter is converted from
+# its published PEFT weights and Nimbus 2 Apex's is fetched as a pinned GGUF;
+# both are read, not changed.
+
+name: desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x64
+          - os: ubuntu-22.04
+            label: linux-x64
+          - os: macos-14
+            label: macos-arm64
+          # Intel Macs: the last Intel image GitHub offers.
+          - os: macos-15-intel
+            label: macos-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Linux window libraries
+        if: runner.os == 'Linux'
+        # pywebview's GTK backend. Where a user's machine lacks WebKitGTK at
+        # run time, the app opens in the default browser instead.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgirepository1.0-dev libcairo2-dev pkg-config gir1.2-webkit2-4.1
+          pip install "pygobject<3.51"
+
+      - name: Dependencies
+        run: pip install -r desktop/packaging/requirements.txt
+
+      - name: Adapter cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/adapter
+            desktop/assets/nimbus-1-1-prime-ee.gguf
+            desktop/assets/nimbus-2-apex.gguf
+          key: adapters-1-1-prime-ee-v1-2-apex-21e406da
+
+      - name: Build
+        run: python desktop/packaging/build.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AhoosAI-Studio-${{ matrix.label }}
+          path: |
+            dist/*.zip
+            dist/*.dmg
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    # One platform failing should not hold back the other three.
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: packages/*
+          draft: true

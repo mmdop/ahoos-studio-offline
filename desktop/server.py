@@ -34,7 +34,10 @@ import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
 
-from fastapi import FastAPI, HTTPException, Request
+import uuid
+
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from starlette.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 
 from .store import Store, StoreError
@@ -67,7 +70,7 @@ def build(controller: "Controller") -> FastAPI:
         # Straight to the studio once a model is installed; the setup page
         # otherwise, since the studio with nothing to answer is a page that
         # fails on the first message.
-        return RedirectResponse("/index.html" if controller.installed() else "/setup.html")
+        return RedirectResponse("/index.html" if controller.any_installed() else "/setup.html")
 
     # -- what the PHP host did ------------------------------------------------
 
@@ -97,13 +100,45 @@ def build(controller: "Controller") -> FastAPI:
             active_chips[:] = clean
         return {"ok": True, "active": len(clean)}
 
-    @app.get("/stream.php")
-    def stream(prompt: str = "", effort: str = "", solo: str = "") -> StreamingResponse:
-        prompt = prompt.strip()
+    def refuse(detail: str) -> StreamingResponse:
+        body = _frame("error", {"detail": detail}) + _frame("closed", {})
+        return StreamingResponse(iter([body]), media_type="text/event-stream")
 
-        def refuse(detail: str) -> StreamingResponse:
-            body = _frame("error", {"detail": detail}) + _frame("closed", {})
-            return StreamingResponse(iter([body]), media_type="text/event-stream")
+    @app.post("/local/turn")
+    async def prepare_turn(request: Request) -> dict:
+        """Hand over a message and the turns before it, and get an id back.
+
+        EventSource can only GET, and a conversation does not fit in a query
+        string. So the turn is posted, kept for a moment, and collected by the
+        stream that follows it. Nothing is stored on disk: this is a relay, and
+        the chat itself is already saved by the page.
+        """
+        body = await request.json()
+        prompt = str((body or {}).get("prompt", "")).strip()
+        if not prompt:
+            raise HTTPException(400, "Empty prompt.")
+        if len(prompt) > MAX_PROMPT:
+            raise HTTPException(413, "Prompt is too long (limit 8000 characters).")
+        history = []
+        for turn in (body.get("history") or [])[-40:]:
+            role = str(turn.get("role", ""))
+            content = str(turn.get("content", ""))
+            if role in ("user", "assistant") and content.strip():
+                history.append({"role": role, "content": content[:MAX_PROMPT]})
+        token = uuid.uuid4().hex
+        # Only a handful are ever in flight; the oldest go when there are too many.
+        while len(controller.turns) > 8:
+            controller.turns.pop(next(iter(controller.turns)), None)
+        controller.turns[token] = {"prompt": prompt, "history": history}
+        return {"turn": token}
+
+    @app.get("/stream.php")
+    def stream(prompt: str = "", effort: str = "", solo: str = "", turn: str = "") -> StreamingResponse:
+        prepared = controller.turns.pop(turn, None) if turn else None
+        if prepared:
+            prompt = prepared["prompt"]
+        prompt = prompt.strip()
+        history = prepared["history"] if prepared else []
 
         if not prompt:
             return refuse("Empty prompt.")
@@ -111,6 +146,9 @@ def build(controller: "Controller") -> FastAPI:
             return refuse("Prompt is too long (limit 8000 characters).")
         if not controller.ready():
             return refuse(controller.not_ready_reason())
+
+        if controller.model.engine == "apex":
+            return _apex_stream(controller, prompt, history)
 
         payload: dict = {"prompt": prompt, "solo": True}
         if effort.lower() in EFFORTS:
@@ -209,10 +247,138 @@ def build(controller: "Controller") -> FastAPI:
             raise HTTPException(400, str(exc)) from exc
         return controller.status()
 
+    @app.post("/local/setup/model")
+    def use_model(model: str) -> dict:
+        try:
+            controller.use_model(model)
+        except (KeyError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return controller.status()
+
     @app.post("/local/open-folder")
     def open_folder(which: str = "models") -> dict:
         controller.open_folder(which)
         return {"ok": True}
+
+    # -- the controls, the folder, and the right to act in it ----------------------
+
+    @app.post("/local/controls")
+    async def controls(request: Request) -> dict:
+        body = await request.json()
+        body = body if isinstance(body, dict) else {}
+        try:
+            controller.set_dials(
+                level=body.get("level"), temperature=body.get("temperature"),
+                memory=body.get("memory"), mode=body.get("mode"),
+                permission=body.get("permission"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return controller.status()["controls"]
+
+    @app.post("/local/pick-folder")
+    def pick_folder() -> dict:
+        try:
+            chosen = controller.pick_folder()
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"folder": chosen}
+
+    @app.post("/local/set-folder")
+    async def set_folder(request: Request) -> dict:
+        body = await request.json()
+        try:
+            controller.set_folder(str((body or {}).get("folder", "")))
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"folder": str(controller.folder() or "")}
+
+    @app.get("/local/folder/list")
+    def list_folder(path: str = "") -> dict:
+        """What is in the working folder, so the page can show where it is working."""
+        try:
+            target = controller.inside(path)
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if not target.is_dir():
+            raise HTTPException(404, "no such folder")
+        entries = []
+        for item in sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))[:400]:
+            entries.append({"name": item.name, "dir": item.is_dir(),
+                            "bytes": item.stat().st_size if item.is_file() else 0})
+        return {"path": path, "entries": entries}
+
+    @app.post("/local/allow")
+    async def allow(request: Request) -> dict:
+        """Record that the person said yes, and for how long.
+
+        The page asks the question; this only remembers the answer. `remember`
+        is honoured when the mode is "session" and ignored when it is "ask",
+        which is why the mode has no third setting.
+        """
+        body = await request.json()
+        body = body if isinstance(body, dict) else {}
+        key = str(body.get("key", "")).strip()
+        if not key:
+            raise HTTPException(400, "nothing to allow")
+        remember = bool(body.get("remember")) and controller.settings.get("permission") == "session"
+        controller.allow(key, remember=remember)
+        return {"allowed": key, "remembered": remember}
+
+    @app.post("/local/open-terminal")
+    def open_terminal() -> dict:
+        try:
+            controller.open_terminal()
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"ok": True}
+
+    @app.websocket("/local/shell")
+    async def shell(socket: WebSocket) -> None:
+        """One command at a time, in the working folder, after it was allowed.
+
+        The socket carries {command, allowed} in and {line|code|error|cut} out.
+        `allowed` is the page saying the person agreed; without it nothing runs,
+        and without a working folder there is nowhere to run it.
+        """
+        from .terminal import Shell
+
+        await socket.accept()
+        folder = controller.folder()
+        if folder is None:
+            await socket.send_json({"error": "Choose a working folder first."})
+            await socket.close()
+            return
+        session = Shell(folder)
+        await socket.send_json({"folder": str(folder)})
+        try:
+            while True:
+                message = await socket.receive_json()
+                command = str(message.get("command", "")).strip()
+                if not command:
+                    continue
+                if message.get("stop"):
+                    session.stop()
+                    continue
+                key = f"shell:{command}"
+                if not message.get("allowed") and controller.needs_asking(key):
+                    await socket.send_json({"ask": command, "key": key})
+                    continue
+                controller.allow(key, remember=bool(message.get("remember")))
+                await socket.send_json({"started": command})
+                queue = session.run(command)
+                while True:
+                    item = await run_in_threadpool(queue.get)
+                    if item is None:
+                        break
+                    await socket.send_json(item)
+        except WebSocketDisconnect:
+            session.stop()
+        except Exception as exc:  # noqa: BLE001 - the socket is the person's only view
+            try:
+                await socket.send_json({"error": str(exc)})
+            except Exception:  # noqa: BLE001
+                pass
+            session.stop()
 
     # The studio API, then the static files, last of all. Routes match in the
     # order they are declared, and `/{name}.{ext}` matches `/stream.php` too:
@@ -228,6 +394,67 @@ def build(controller: "Controller") -> FastAPI:
         return _static(ui, f"{name}.{ext}")
 
     return app
+
+
+def _apex_stream(controller: "Controller", prompt: str, history: list[dict]) -> StreamingResponse:
+    """Nimbus 2 Apex, straight to llama.cpp, in the event names the page knows.
+
+    `plan:done` carries the level, the temperature and whether the ceiling
+    closed the reasoning, so the existing stage in the page tells the truth
+    about the dials instead of about a manager that is not here. `apex:think`
+    and `apex:delta` are extra; app.js ignores events it did not register, and
+    desktop.js listens for them.
+    """
+    from .apex import Apex, ApexError, Turn
+    from nimbus2.controls import Controls
+
+    if controller.server is None:
+        return StreamingResponse(iter([_frame("error", {"detail": "The model is not running."})
+                                       + _frame("closed", {})]), media_type="text/event-stream")
+
+    settings = controller.settings
+    keep = int(settings.get("memory", 0))
+    turns = [Turn(t["role"], t["content"]) for t in history][-(keep * 2):] if keep else []
+    controls = Controls(thinking_level=int(settings.get("level", 5)),
+                        temperature=int(settings.get("temperature", 5)))
+    engine = Apex(controller.server.base_url)
+
+    def frames() -> Iterator[bytes]:
+        answer: dict = {}
+        try:
+            for event, payload in engine.generate(prompt, controls, turns):
+                if event == "think":
+                    yield _frame("apex:think", payload).encode()
+                elif event == "closed":
+                    yield _frame("plan:done", {
+                        "handle_directly": True,
+                        "rationale": (f"level {controls.thinking_level}/20, temperature "
+                                      f"{controls.temperature}/10 — {payload['words']} words of "
+                                      f"reasoning against a target of {payload['target']}"
+                                      + (", closed at the ceiling" if payload["forced"] else "")),
+                        "delegations": [],
+                    }).encode()
+                    yield _frame("apex:closed", payload).encode()
+                elif event == "answer_delta":
+                    yield _frame("apex:delta", payload).encode()
+                else:
+                    answer = payload
+        except ApexError as error:
+            yield _frame("error", {"detail": str(error)}).encode()
+            yield _frame("closed", {}).encode()
+            return
+        except Exception as error:  # noqa: BLE001 - reported to the person, not swallowed
+            yield _frame("error", {"detail": f"The local model did not answer: {error}"}).encode()
+            yield _frame("closed", {}).encode()
+            return
+        if not answer.get("answer"):
+            yield _frame("error", {"detail": "The local model returned nothing."}).encode()
+        else:
+            yield _frame("done", {"answer": answer["answer"], "apex": answer}).encode()
+        yield _frame("closed", {}).encode()
+
+    return StreamingResponse(frames(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache"})
 
 
 def _static(folder: Path, name: str) -> FileResponse:

@@ -46,11 +46,47 @@ for _name in ("NIMBUS_API_KEY", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "NIMBUS_
 os.environ.setdefault("NIMBUS_HTTP_ATTEMPTS", "1")
 os.environ.setdefault("NIMBUS_HTTP_TIMEOUT", "3600")
 
-DEFAULT_SETTINGS = {"build": catalogue.DEFAULT_BUILD, "context": 8192, "threads": 0, "gpu_layers": 0}
+DEFAULT_SETTINGS = {
+    "model": catalogue.DEFAULT_MODEL,
+    "build": catalogue.DEFAULT_BUILD,
+    "builds": {},               # model id -> the build last used for it
+    "context": 8192,
+    "threads": 0,
+    "gpu_layers": 0,
+    # Nimbus 2 Apex's two dials. Level 5 and temperature 5 are what the model
+    # was trained against and what the benchmark measured, so they are the
+    # defaults; anything else is the person's choice, not ours.
+    "level": 5,
+    "temperature": 5,
+    # 0 turns off memory. The app was stateless for a year and said so in the
+    # footer; anyone who liked that keeps it by leaving this at 0.
+    "memory": 0,
+    # "ask" every time, or "session" to stop asking again for something already
+    # allowed once. There is deliberately no "never".
+    "permission": "ask",
+    "folder": "",               # the working folder, chosen by the person
+    "mode": "normal",           # normal | plan
+}
 
 
 class Cancelled(Exception):
     """Raised from the progress callback to stop a download where it is."""
+
+
+def inside(root: Path, relative: str) -> Path:
+    """A path within the working folder, or a refusal.
+
+    Resolved first and checked afterwards, the way Store._blob() guards its own
+    directory: a name is text from somewhere else until it has been proved to
+    land where it claims. Resolving first is the whole point -- `a/../../b`
+    only shows what it is once the dots are gone, and on Windows a symbolic
+    link or a short name resolves to somewhere else entirely.
+    """
+    root = root.resolve()
+    target = (root / str(relative)).resolve()
+    if target != root and root not in target.parents:
+        raise RuntimeError(f"{relative} is outside the working folder")
+    return target
 
 
 class Controller:
@@ -67,6 +103,13 @@ class Controller:
         self._cancel = threading.Event()
         self._lock = threading.RLock()
         self.self_url = ""
+        # Things already allowed this session, when the mode is "session".
+        # In memory only: closing the app forgets them, which is the point.
+        self.allowed: set[str] = set()
+        # Prepared turns waiting for their stream. EventSource cannot POST, so a
+        # message with its history is handed over first and collected by id.
+        self.turns: dict[str, dict] = {}
+        self.window = None                # pywebview's window, for the folder dialog
 
         from studio.api.app import State, create_app
 
@@ -112,19 +155,42 @@ class Controller:
         path = models_dir() / build.filename
         return path.is_file() and path.stat().st_size == build.bytes
 
-    def installed_builds(self) -> list[catalogue.Build]:
-        return [b for b in catalogue.BUILDS if self._complete(b)]
+    @property
+    def model_id(self) -> str:
+        return str(self.settings.get("model") or catalogue.DEFAULT_MODEL)
+
+    @property
+    def model(self) -> catalogue.Model:
+        try:
+            return catalogue.model(self.model_id)
+        except KeyError:
+            return catalogue.model(catalogue.DEFAULT_MODEL)
+
+    def adapter_path(self):
+        return catalogue.adapter_path(self.model.id)
+
+    def installed_builds(self, model_id: str | None = None) -> list[catalogue.Build]:
+        """Downloaded builds of one model -- the active one unless told otherwise."""
+        wanted = model_id or self.model_id
+        return [b for b in catalogue.builds_for(wanted) if self._complete(b)]
 
     def installed(self) -> bool:
         if self.engine != "local":
             return True
-        return bool(self.installed_builds()) and catalogue.adapter_path().is_file()
+        return bool(self.installed_builds()) and self.adapter_path().is_file()
+
+    def any_installed(self) -> bool:
+        """Whether *some* model can run -- what the first page decides on."""
+        if self.engine != "local":
+            return True
+        return any(self.installed_builds(m.id) and catalogue.adapter_path(m.id).is_file()
+                   for m in catalogue.MODELS)
 
     def current_build(self) -> catalogue.Build | None:
-        chosen = [b for b in self.installed_builds() if b.key == self.settings["build"]]
+        installed = self.installed_builds()
+        chosen = [b for b in installed if b.key == self.settings["build"]]
         if chosen:
             return chosen[0]
-        installed = self.installed_builds()
         return installed[0] if installed else None
 
     def ready(self) -> bool:
@@ -144,9 +210,10 @@ class Controller:
             self.state = "ready"
             return
         build = self.current_build()
-        if build is None or not catalogue.adapter_path().is_file():
+        if build is None or not self.adapter_path().is_file():
             self.state = "missing"
             return
+        adapter = self.adapter_path()
 
         def work() -> None:
             with self._lock:
@@ -155,7 +222,7 @@ class Controller:
                 try:
                     server = runtime.ModelServer(runtime.Settings(
                         model=models_dir() / build.filename,
-                        adapter=catalogue.adapter_path(),
+                        adapter=adapter,
                         context=int(self.settings["context"]),
                         threads=int(self.settings["threads"]),
                         gpu_layers=int(self.settings["gpu_layers"]),
@@ -210,9 +277,12 @@ class Controller:
                 self.download.update(state="failed", error=str(exc))
                 return
             self.download.update(state="done", done=build.bytes)
-            # The first model a person installs is the one they meant to use.
+            # The first model a person installs is the one they meant to use, and
+            # so is the first build of a model they had not downloaded before.
             if self.state in ("missing", "failed") or self.current_build() is None:
+                self.settings["model"] = build.model
                 self.settings["build"] = key
+                self.settings.setdefault("builds", {})[build.model] = key
                 self._save_settings()
                 self.start_model()
 
@@ -222,12 +292,43 @@ class Controller:
         self._cancel.set()
 
     def use(self, key: str) -> None:
+        """Run this build. A build belongs to a model, so choosing one chooses both."""
         build = catalogue.build(key)
         if not self._complete(build):
             raise RuntimeError(f"{build.key} is not downloaded")
+        self.settings["model"] = build.model
         self.settings["build"] = key
+        self.settings.setdefault("builds", {})[build.model] = key
         self._save_settings()
         self.start_model()
+
+    def use_model(self, model_id: str) -> None:
+        """Switch models, keeping whichever build was last used for this one."""
+        model = catalogue.model(model_id)
+        installed = self.installed_builds(model.id)
+        if not installed:
+            raise RuntimeError(f"{model.name} has no downloaded build yet")
+        remembered = str(self.settings.get("builds", {}).get(model.id, ""))
+        key = remembered if any(b.key == remembered for b in installed) else installed[0].key
+        self.use(key)
+
+    def set_dials(self, level: int | None = None, temperature: int | None = None,
+                  memory: int | None = None, mode: str | None = None,
+                  permission: str | None = None) -> None:
+        """The controls, held here so they survive the window closing."""
+        if level is not None:
+            self.settings["level"] = max(1, min(20, int(level)))
+        if temperature is not None:
+            self.settings["temperature"] = max(1, min(10, int(temperature)))
+        if memory is not None:
+            self.settings["memory"] = max(0, min(20, int(memory)))
+        if mode in ("normal", "plan"):
+            self.settings["mode"] = mode
+        if permission in ("ask", "session"):
+            self.settings["permission"] = permission
+            if permission == "ask":
+                self.allowed.clear()
+        self._save_settings()
 
     def delete(self, key: str) -> None:
         build = catalogue.build(key)
@@ -237,8 +338,82 @@ class Controller:
         for path in (models_dir() / build.filename, models_dir() / (build.filename + ".part")):
             path.unlink(missing_ok=True)
 
+    # -- the working folder, and the right to act in it ---------------------------
+
+    def folder(self) -> Path | None:
+        raw = str(self.settings.get("folder") or "")
+        if not raw:
+            return None
+        path = Path(raw)
+        return path if path.is_dir() else None
+
+    def pick_folder(self) -> str:
+        """Ask the person for a folder, through the window's own native dialog.
+
+        Not a text field: a path typed by hand is a path nobody checked, and the
+        dialog is the only place the operating system asks the question.
+        """
+        if self.window is None:
+            raise RuntimeError("there is no window to open a dialog from; "
+                               "run without --browser to choose a folder")
+        import webview
+
+        chosen = self.window.create_file_dialog(webview.FOLDER_DIALOG)
+        if not chosen:
+            return ""
+        self.set_folder(chosen[0])
+        return str(self.folder() or "")
+
+    def set_folder(self, raw: str) -> None:
+        path = Path(str(raw)).expanduser()
+        if not path.is_dir():
+            raise RuntimeError(f"not a folder: {path}")
+        self.settings["folder"] = str(path.resolve())
+        self.allowed.clear()           # a new folder is a new set of questions
+        self._save_settings()
+
+    def inside(self, relative: str) -> Path:
+        root = self.folder()
+        if root is None:
+            raise RuntimeError("no working folder has been chosen yet")
+        return inside(root, relative)
+
+    def needs_asking(self, key: str) -> bool:
+        """Whether this action still has to be put to the person."""
+        if self.settings.get("permission") != "session":
+            return True
+        return key not in self.allowed
+
+    def allow(self, key: str, *, remember: bool = False) -> None:
+        if remember:
+            self.allowed.add(key)
+
+    def open_terminal(self) -> None:
+        """The system's own terminal, in the working folder."""
+        folder = self.folder() or data_dir()
+        if os.name == "nt":
+            # Windows Terminal when it is there, the old console when it is not.
+            for argv in (["wt.exe", "-d", str(folder)], ["cmd.exe", "/c", "start", "cmd.exe"]):
+                try:
+                    subprocess.Popen(argv, cwd=str(folder))
+                    return
+                except OSError:
+                    continue
+            raise RuntimeError("no terminal could be started")
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-a", "Terminal", str(folder)])
+            return
+        for argv in (["x-terminal-emulator"], ["gnome-terminal"], ["konsole"], ["xterm"]):
+            try:
+                subprocess.Popen(argv, cwd=str(folder))
+                return
+            except OSError:
+                continue
+        raise RuntimeError("no terminal could be started")
+
     def open_folder(self, which: str) -> None:
-        folder = {"models": models_dir(), "files": self.store.blobs, "data": data_dir()}.get(which)
+        folder = {"models": models_dir(), "files": self.store.blobs, "data": data_dir(),
+                  "work": self.folder()}.get(which)
         if folder is None:
             return
         folder.mkdir(parents=True, exist_ok=True)
@@ -258,12 +433,19 @@ class Controller:
             path = models_dir() / build.filename
             partial = path.with_name(path.name + ".part")
             builds.append({
-                "key": build.key, "gigabytes": round(build.gigabytes, 2),
+                "key": build.key, "model": build.model, "gigabytes": round(build.gigabytes, 2),
                 "ram_hint_gb": build.ram_hint_gb, "label_en": build.label_en, "label_fa": build.label_fa,
                 "installed": self._complete(build),
                 "partial_bytes": partial.stat().st_size if partial.is_file() else 0,
                 "bytes": build.bytes,
             })
+        models = [{
+            "id": m.id, "name": m.name, "engine": m.engine,
+            "summary_en": m.summary_en, "summary_fa": m.summary_fa,
+            "adapter": catalogue.adapter_path(m.id).is_file(),
+            "installed": bool(self.installed_builds(m.id)),
+            "active": m.id == self.model_id,
+        } for m in catalogue.MODELS]
         current = self.current_build()
         try:
             runtime_path = str(runtime.find_binary())
@@ -276,12 +458,25 @@ class Controller:
             "current": current.key if current else None,
             "chosen": self.settings["build"],
             "builds": builds,
-            "adapter": catalogue.adapter_path().is_file(),
+            "models": models,
+            "model": self.model_id,
+            "model_name": self.model.name,
+            "model_engine": self.model.engine,
+            "adapter": self.adapter_path().is_file(),
             "runtime": runtime_path,
             "download": self.download,
             "machine": facts,
             "paths": {"models": str(models_dir()), "data": str(data_dir())},
             "log": self.server.tail(6) if self.server else "",
+            "controls": {
+                "level": int(self.settings["level"]),
+                "temperature": int(self.settings["temperature"]),
+                "memory": int(self.settings["memory"]),
+                "mode": self.settings["mode"],
+                "permission": self.settings["permission"],
+                "folder": str(self.folder() or ""),
+                "allowed": len(self.allowed),
+            },
         }
 
 
@@ -347,7 +542,9 @@ def run(*, engine: str = "local", browser: bool = False, port: int = 0) -> int:
             # so no except clause here sees it and the whole process exits
             # without a word. The first packaged build did exactly that.
             icon = assets_dir() / ("icon.ico" if os.name == "nt" else "icon.png")
-            webview.create_window(
+            # Kept on the controller: the folder dialog is the window's, and a
+            # request arriving on the server thread has no other way to reach it.
+            controller.window = webview.create_window(
                 "AhoosAI Studio", controller.self_url + "/",
                 width=1280, height=840, min_size=(760, 560), text_select=True)
             try:

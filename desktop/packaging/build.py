@@ -18,7 +18,7 @@ hand on any one of them produces that one.
 WHAT GOES IN
 
     the Python app       desktop/, studio/, and their dependencies
-    ui/                  regenerated from the web studio by port_studio_ui.py
+    ui/                  the studio's page, written for the desktop
     family/              the offline registry root, assembled from the repository
     assets/              the adapter (built from the Hub if absent) and the icon
     bin/                 llama-server and its libraries for this platform
@@ -50,9 +50,9 @@ DIST = ROOT / "dist"
 sys.path.insert(0, str(ROOT))
 
 from desktop import __main__ as cli  # noqa: E402
-from desktop import catalogue, family  # noqa: E402
+from desktop import __version__, catalogue, family  # noqa: E402
 
-VERSION = "2.0.0"
+VERSION = __version__
 NAME = "AhoosAI Studio"
 
 # Nimbus 2 Apex's adapter, exactly as published on the Hub.
@@ -124,12 +124,10 @@ def main() -> int:
     STAGE.mkdir(parents=True, exist_ok=True)
 
     step("interface")
-    # The private repository regenerates the page from the web studio; the public
-    # one carries the generated page and has nothing to regenerate it from.
-    if (ROOT / "tools/port_studio_ui.py").is_file():
-        run(sys.executable, "tools/port_studio_ui.py")
-    elif not (ROOT / "desktop/ui/index.html").is_file():
-        raise SystemExit("interface: desktop/ui/index.html is missing")
+    # The desktop's own page since 2.5.0; nothing is generated from the web studio.
+    for name in ("studio.html", "studio.css", "studio.js", "i18n.js", "md.js"):
+        if not (ROOT / "desktop/ui" / name).is_file():
+            raise SystemExit(f"interface: desktop/ui/{name} is missing")
 
     step("adapters")
     # One per model, and both have to be here: a package missing an adapter

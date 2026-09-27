@@ -44,64 +44,20 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import struct
 import sys
 import urllib.request
 from pathlib import Path
 
-import numpy as np
 
 ADAPTER_REPO = "AhoosAI/nimbus-1-1-prime-ee"
 BASE_REPO = "Qwen/Qwen2.5-Coder-7B-Instruct"
 HUB = "https://huggingface.co/%s/resolve/main/%s"
 
 
-# -- safetensors, without the library ---------------------------------------
-
-def read_safetensors(path: Path) -> tuple[dict[str, np.ndarray], dict]:
-    """Every tensor in the file, as float32, plus whatever metadata it carries."""
-    with path.open("rb") as handle:
-        (header_length,) = struct.unpack("<Q", handle.read(8))
-        header = json.loads(handle.read(header_length))
-        body = handle.read()
-
-    metadata = header.pop("__metadata__", {})
-    tensors: dict[str, np.ndarray] = {}
-    for name, entry in header.items():
-        start, end = entry["data_offsets"]
-        raw = body[start:end]
-        dtype = entry["dtype"]
-        if dtype == "BF16":
-            # numpy has no bfloat16. The bits are the high half of a float32, so
-            # widening is a shift rather than a conversion -- and it is exact,
-            # which matters because this is the only step where a mistake would
-            # be invisible: the file would load and the answers would drift.
-            half = np.frombuffer(raw, dtype="<u2").astype(np.uint32) << 16
-            values = half.view(np.float32)
-        elif dtype == "F16":
-            values = np.frombuffer(raw, dtype="<f2").astype(np.float32)
-        elif dtype == "F32":
-            values = np.frombuffer(raw, dtype="<f4")
-        elif dtype == "F64":
-            values = np.frombuffer(raw, dtype="<f8").astype(np.float32)
-        else:
-            raise SystemExit(f"{name}: unsupported dtype {dtype!r}")
-        tensors[name] = values.reshape(entry["shape"])
-    return tensors, metadata
-
-
-# -- naming ------------------------------------------------------------------
-
-def base_tensor_name(lora_name: str) -> str:
-    """The base model's name for the weight this pair adapts.
-
-    Straight from llama.cpp's get_base_tensor_name, so the two agree.
-    """
-    name = lora_name.replace("base_model.model.", "")
-    for suffix in (".lora_A.weight", ".lora_B.weight",
-                   ".lora_embedding_A", ".lora_embedding_B"):
-        name = name.replace(suffix, ".weight")
-    return name
+# The conversion itself lives in desktop/lora.py, where the app uses it for
+# adapters imported from the Hub. This script is the build's way in.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from desktop.lora import LoraError, convert as convert_files  # noqa: E402
 
 
 # Size and hash for the one file big enough to arrive half-finished. The Hub
@@ -123,70 +79,13 @@ def fetch(url: str, target: Path, *, size: int = 0, sha256: str = "") -> Path:
 
 
 def convert(adapter_dir: Path, out: Path) -> Path:
-    import gguf
-
-    config = json.loads((adapter_dir / "adapter_config.json").read_text(encoding="utf-8"))
     base_config = json.loads((adapter_dir / "base_config.json").read_text(encoding="utf-8"))
-
-    # Qwen2 and Qwen3 are both here because both bases are shipped, and each one
-    # is named rather than guessed: `general.architecture` has to match the base
-    # or llama.cpp refuses the file, and a mapping written for the wrong family
-    # produces a file that loads and generates noise.
-    ARCHES = {"Qwen2ForCausalLM": gguf.MODEL_ARCH.QWEN2,
-              "Qwen3ForCausalLM": gguf.MODEL_ARCH.QWEN3}
-    architectures = base_config.get("architectures") or []
-    if len(architectures) != 1 or architectures[0] not in ARCHES:
-        raise SystemExit(
-            f"the base model reports {architectures}, which this converter has not been "
-            f"checked against. It knows {', '.join(ARCHES)}."
-        )
-    arch = ARCHES[architectures[0]]
-    block_count = int(base_config["num_hidden_layers"])
-    alpha = float(config["lora_alpha"])
-
-    tensors, _ = read_safetensors(adapter_dir / "adapter_model.safetensors")
-    name_map = gguf.get_tensor_name_map(arch, block_count)
-
-    pairs: dict[str, dict[str, np.ndarray]] = {}
-    for name, values in tensors.items():
-        if ".lora_A.weight" in name or ".lora_embedding_A" in name:
-            side = "a"
-        elif ".lora_B.weight" in name or ".lora_embedding_B" in name:
-            side = "b"
-        else:
-            raise SystemExit(f"{name}: not a lora_A or lora_B tensor")
-
-        hf_name = base_tensor_name(name)
-        mapped = name_map.get_name(hf_name.removesuffix(".weight"), try_suffixes=(".weight",))
-        if mapped is None:
-            raise SystemExit(f"{name}: no GGUF name for {hf_name}")
-        pairs.setdefault(mapped + ".weight", {})[side] = values
-
-    lonely = [k for k, v in pairs.items() if len(v) != 2]
-    if lonely:
-        raise SystemExit(
-            f"{len(lonely)} weights have only one half of their pair: {lonely[:4]}"
-        )
-
-    out.parent.mkdir(parents=True, exist_ok=True)
-    writer = gguf.GGUFWriter(str(out), gguf.MODEL_ARCH_NAMES[arch])
-    writer.add_type(gguf.GGUFType.ADAPTER)
-    writer.add_string(gguf.Keys.Adapter.TYPE, "lora")
-    writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, alpha)
-
-    for dest, halves in sorted(pairs.items()):
-        for side in ("a", "b"):
-            # f16 on purpose: the adapter was trained in bfloat16, so f16 keeps
-            # every bit that carries signal and halves a file that ships inside
-            # the installer.
-            writer.add_tensor(f"{dest}.lora_{side}", halves[side].astype(np.float16))
-
-    writer.write_header_to_file()
-    writer.write_kv_data_to_file()
-    writer.write_tensors_to_file()
-    writer.close()
-
-    print(f"  {len(pairs)} adapted weights, rank {config['r']}, alpha {alpha:g}")
+    try:
+        done = convert_files(adapter_dir / "adapter_config.json", adapter_dir / "adapter_model.safetensors",
+                             base_config, out)
+    except LoraError as error:
+        raise SystemExit(str(error)) from error
+    print(f"  {done['pairs']} adapted weights, rank {done['rank']}, alpha {done['alpha']:g}")
     print(f"  {out}  {out.stat().st_size / 1e6:.1f} MB")
     return out
 

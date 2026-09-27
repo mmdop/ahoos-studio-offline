@@ -33,6 +33,7 @@ import hashlib
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,12 +64,33 @@ class Progress:
 OnProgress = Callable[[Progress], None]
 
 
-def _open(url: str, offset: int):
-    headers = {"User-Agent": USER_AGENT}
+class _SameHostAuth(urllib.request.HTTPRedirectHandler):
+    """Follow redirects, but keep a token on the host it was meant for.
+
+    The Hub answers a file request with a redirect to a signed CDN address.
+    urllib copies every header onto the redirected request, and a storage
+    service that sees both a signature in the address and an Authorization
+    header refuses the request -- and the token would have been handed to a
+    host it was never meant for, too.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and urllib.parse.urlsplit(newurl).netloc != urllib.parse.urlsplit(req.full_url).netloc:
+            for name in [h for h in new.headers if h.lower() == "authorization"]:
+                del new.headers[name]
+            new.unredirected_hdrs.pop("Authorization", None)
+        return new
+
+
+def _open(url: str, offset: int, headers: dict | None = None):
+    sent = {"User-Agent": USER_AGENT, **(headers or {})}
     if offset:
-        headers["Range"] = f"bytes={offset}-"
-    request = urllib.request.Request(url, headers=headers)
-    return urllib.request.urlopen(request, timeout=CONNECT_TIMEOUT)
+        sent["Range"] = f"bytes={offset}-"
+    request = urllib.request.Request(url, headers=sent)
+    # Built per request, so a proxy set in the app's settings applies to the next
+    # download without a restart.
+    return urllib.request.build_opener(_SameHostAuth).open(request, timeout=CONNECT_TIMEOUT)
 
 
 def _sha256(path: Path, on_progress: OnProgress | None = None) -> str:
@@ -90,7 +112,7 @@ def _sha256(path: Path, on_progress: OnProgress | None = None) -> str:
 
 
 def fetch(url: str, target: Path, *, expected_bytes: int = 0, sha256: str = "",
-          on_progress: OnProgress | None = None) -> Path:
+          on_progress: OnProgress | None = None, headers: dict | None = None) -> Path:
     """Download `url` to `target`, resuming a previous attempt if there is one.
 
     Returns the path. Raises DownloadError with something a person can act on.
@@ -113,7 +135,7 @@ def fetch(url: str, target: Path, *, expected_bytes: int = 0, sha256: str = "",
     lock = target.with_suffix(target.suffix + ".lock")
     _acquire(lock, partial)
     try:
-        return _fetch_locked(url, target, partial, expected_bytes, sha256, on_progress)
+        return _fetch_locked(url, target, partial, expected_bytes, sha256, on_progress, headers)
     finally:
         lock.unlink(missing_ok=True)
 
@@ -142,7 +164,7 @@ def _acquire(lock: Path, partial: Path) -> None:
 
 
 def _fetch_locked(url: str, target: Path, partial: Path, expected_bytes: int, sha256: str,
-                  on_progress: OnProgress | None) -> Path:
+                  on_progress: OnProgress | None, headers: dict | None = None) -> Path:
     stalled = 0
     declared = expected_bytes
     started = time.monotonic()
@@ -155,7 +177,7 @@ def _fetch_locked(url: str, target: Path, partial: Path, expected_bytes: int, sh
             offset = 0
 
         try:
-            with _open(url, offset) as response:
+            with _open(url, offset, headers) as response:
                 # A server that ignored the Range header sends 200 and the whole
                 # file. Appending that to what is already there would make a
                 # corrupt file of believable size -- so start again instead.
@@ -196,8 +218,8 @@ def _fetch_locked(url: str, target: Path, partial: Path, expected_bytes: int, sh
                 pass
             elif exc.code in (401, 403):
                 raise DownloadError(
-                    f"the server refused the download ({exc.code}). "
-                    "This file may have been made private or gated since the app was built."
+                    f"the server refused the download ({exc.code}). The file is private or "
+                    "gated: accept its terms on the Hub and add a Hugging Face token in Settings."
                 ) from exc
             elif exc.code == 404:
                 raise DownloadError(

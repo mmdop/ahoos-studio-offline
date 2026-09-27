@@ -15,6 +15,8 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from desktop import __version__  # noqa: E402
 STAGE = Path(os.environ["AHOOS_STAGE"])
 BIN = Path(os.environ["AHOOS_BIN"])
 FAMILY = Path(os.environ["AHOOS_FAMILY"])
@@ -84,7 +86,7 @@ if IS_MAC:
         icon=icon,
         bundle_identifier="site.ahoos-ai.studio",
         info_plist={
-            "CFBundleShortVersionString": "1.1.0",
+            "CFBundleShortVersionString": __version__,
             "NSHighResolutionCapable": True,
             # The app talks only to itself on 127.0.0.1 and to Hugging Face
             # over HTTPS; neither needs an ATS exception.

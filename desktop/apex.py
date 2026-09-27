@@ -91,6 +91,17 @@ def prompt_for(system: str, history: list[Turn], request: str) -> str:
     return "".join(parts)
 
 
+def chatml(messages: list[dict]) -> str:
+    """The same template for a conversation that includes tool calls.
+
+    agent.py hands over the turns ready-made -- tool calls and their results
+    are text inside them, in the <tool_call> / <tool_response> form Qwen3 was
+    trained on -- so this only frames them. Past answers arrive without their
+    reasoning already.
+    """
+    return "".join(f"<|im_start|>{m['role']}\n{m['content']}{END_TURN}\n" for m in messages)
+
+
 @dataclass
 class Answer:
     think: str

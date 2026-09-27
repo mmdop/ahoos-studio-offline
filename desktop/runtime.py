@@ -102,6 +102,9 @@ class Settings:
     threads: int = 0             # 0 lets llama.cpp choose
     gpu_layers: int = 0          # CPU by default; the shipped binary has no CUDA
     port: int = 0
+    # Two slots sharing one context: a conversation uses the whole of it, and a
+    # battle's two answers are generated side by side in the two slots.
+    parallel: int = 2
 
 
 class ModelServer:
@@ -130,7 +133,11 @@ class ModelServer:
             # because it is not reachable, and those two facts have to stay joined.
             "--no-webui",
         ]
+        if self.settings.parallel > 1:
+            argv += ["--parallel", str(self.settings.parallel), "--kv-unified"]
         if self.settings.adapter:
+            # Loaded once; each request says how strongly to apply it (engine.py),
+            # so the base model is the same process with the adapter at zero.
             argv += ["--lora", str(self.settings.adapter)]
         if self.settings.threads:
             argv += ["--threads", str(self.settings.threads)]

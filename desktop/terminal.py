@@ -40,6 +40,21 @@ MAX_LINE = 4000
 MAX_LINES = 2000                # what one command may send back before it is cut
 
 
+def kill_tree(process: subprocess.Popen) -> None:
+    """Stop a command and whatever it started.
+
+    On Windows the process is cmd.exe, and killing it leaves `python app.py`
+    running underneath with no window and nobody to stop it.
+    """
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                       capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    else:
+        process.kill()
+
+
 def shell_for(command: str) -> list[str]:
     """The argv that runs a command line as the platform's own shell would."""
     if os.name == "nt":
@@ -74,9 +89,9 @@ class Shell:
     def stop(self) -> None:
         with self._lock:
             if self.busy and self.process is not None:
-                self.process.kill()
+                kill_tree(self.process)
 
-    def run(self, command: str) -> Queue:
+    def run(self, command: str, timeout: float = TIMEOUT) -> Queue:
         """Start the command; lines arrive on the returned queue, then None.
 
         A queue rather than a generator because the reader is a WebSocket on a
@@ -99,6 +114,7 @@ class Shell:
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
                     errors="replace", bufsize=1,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
             except OSError as error:
                 out.put({"error": f"could not run it: {error}"})
@@ -106,23 +122,39 @@ class Shell:
                 return out
         process = self.process
 
+        # The deadline is a timer, not a wait after the output ends: a program
+        # that never closes its output -- a dev server, a watcher -- would
+        # otherwise hold the loop below open and the limit would never apply.
+        expired = threading.Event()
+
+        def expire() -> None:
+            expired.set()
+            kill_tree(process)
+
+        timer = threading.Timer(timeout, expire)
+        timer.daemon = True
+        timer.start()
+
         def pump() -> None:
             count = 0
+            code = None
             try:
                 for line in process.stdout or []:
                     count += 1
                     if count > MAX_LINES:
                         out.put({"cut": True})
-                        process.kill()
+                        kill_tree(process)
                         break
                     out.put({"line": line.rstrip("\n")[:MAX_LINE]})
-                code = process.wait(timeout=TIMEOUT)
+                code = process.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                process.kill()
-                out.put({"error": f"stopped after {TIMEOUT:.0f} seconds"})
-                code = None
+                kill_tree(process)
             except Exception as error:  # noqa: BLE001 - reported, not swallowed
                 out.put({"error": str(error)})
+            finally:
+                timer.cancel()
+            if expired.is_set():
+                out.put({"error": f"stopped after {timeout:.0f} seconds"})
                 code = None
             out.put({"code": code})
             out.put(None)

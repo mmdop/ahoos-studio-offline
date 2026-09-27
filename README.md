@@ -5,7 +5,7 @@
 <h1 align="center">AhoosAI Studio — Offline</h1>
 
 <p align="center">
-  Run AhoosAI's models on your own computer.<br>
+  Run AhoosAI's models — or any GGUF model — on your own computer.<br>
   No account, no sign-in, and no internet after a one-time model download.
 </p>
 
@@ -20,8 +20,8 @@
 
 The model runs on your machine through
 [llama.cpp](https://github.com/ggml-org/llama.cpp). Your conversations, the files
-it writes and the folder you point it at never leave the computer. The only
-network request the app ever makes is the one that downloads the model, once.
+it writes and the folder you point it at never leave the computer. The app goes
+online only to download a model, and — if you turn it on — to search the web.
 
 ## The two models
 
@@ -48,28 +48,31 @@ eight gigabytes of memory and Apex does not.
 
 ## What the app has
 
-- **Two dials that mean something.** A thinking level from 1 to 20 — a word
-  target the model was actually trained against, with a ceiling that closes the
-  reasoning when the budget runs out. A temperature from 1 to 10, where each step
-  is a whole sampling profile rather than one number moved.
-- **Memory between messages**, off by default — four turns, or twelve.
-- **A working folder**, chosen from your system's own dialog. Every path below it
-  is resolved and then checked; one that climbs out is refused, not repaired.
-- **A gate.** Before the model writes a file or runs a command you see exactly
-  what will happen, and it does not happen until you say so. There is no list of
-  forbidden commands: such a list looks like safety and is not.
-- **A terminal** in that folder, and a button that opens your system's own there.
-- **Plan or Normal.** In plan mode it writes down what it would do and waits.
-- **Pictures.** An image is turned into an XML description of the scene, which the
-  model reads as text — the weights are text-only and stay that way. It reads
-  about half the charts put in front of it correctly and does not reliably know
-  when it has the other half wrong, so check anything that matters.
+- **A model that does the work.** Connect a folder and it lists, reads, writes
+  and edits files there and runs commands — then tells you what came of it,
+  instead of printing code for you to copy. It is told what it is running in,
+  which folder it may touch and whether the internet is on.
+- **A gate.** Reading is free. Before the model writes, deletes or runs anything
+  you see exactly what will happen — the diff, or the command as it will run —
+  and nothing happens until you allow it. There is no "never ask" setting, and no
+  list of forbidden commands: such a list looks like safety and is not.
+- **The internet, if you want it** — off until you choose. Your computer's own
+  connection (through its VPN or proxy, no key needed), an API key for Tavily,
+  Brave, Exa, Serper or Jina, or any other search API you describe.
+- **Battle.** One prompt, answered side by side by the base model and by the same
+  model with its adapter — together, or one after the other. Vote, blind if you
+  like, and keep score.
+- **Any model from Hugging Face.** Paste a link to a model and, if you want, to an
+  adapter. The files are found for you — every size, split files grouped — and
+  queued for download. An adapter in PEFT form is converted on your computer.
+- **Two dials that mean something** (Nimbus 2 Apex). A thinking level from 1 to 20
+  — a word target the model was trained against, with a ceiling that closes the
+  reasoning when the budget runs out — and a temperature from 1 to 10.
+- **Memory between messages**, plan mode, skills you write yourself, a terminal in
+  the working folder, conversations kept on disk.
 - **English and Persian**, left-to-right and right-to-left.
-- Conversations with their history, files saved to disk and never expired, effort
-  levels, `@CR-file` for complete files instead of code in the chat, and skill
-  chips you can create, import and switch.
 
-**Not in the offline edition:** web search and team mode. Every message is
+**Not in the offline edition:** team mode, and pictures. Every message is
 answered by the one model on your computer.
 
 ## Download

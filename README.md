@@ -164,7 +164,7 @@ python desktop/packaging/build.py
 builds the package for the machine it runs on — PyInstaller freezes the
 interpreter it runs under and llama.cpp's binaries are per platform, so none of
 the three can be cross-built. `.github/workflows/desktop.yml` builds all four on
-their own runners; pushing a tag like `v3.0.0` attaches them to a draft
+their own runners; pushing a tag like `v3.0.1` attaches them to a draft
 release.
 
 To work on the app without packaging it:

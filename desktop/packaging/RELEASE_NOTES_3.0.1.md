@@ -39,16 +39,17 @@
 - On Windows, commands with a quoted path (`python "my script.py"`) failed in 2.5; they run now.
 - If Windows' **Smart App Control** blocks the model engine, the app says so and what you can do, instead of "the model stopped while loading".
 - Some graphics drivers lose the card when the model is put on it in blocks of a gigabyte — a GTX 1050 Ti on a 2022 driver did, past nine layers. The model now goes on in blocks of 512 MB, which every card takes.
+- On Windows, the model engine and every server the app started now end with the app, however it ends — closed, crashed or ended from the Task Manager. Before, an app ended that way left the engine running, holding gigabytes of memory and the graphics card.
 - The summary at the end is in the language you asked in.
 
 ## Download
 
 | System | File | Size |
 |---|---|---|
-| Windows 10 / 11, 64-bit | `AhoosAI-Studio-3.0.0-windows-x64.zip` | 307 MB |
-| macOS, Apple silicon (M1 and later) | `AhoosAI-Studio-3.0.0-macos-arm64.dmg` | 295 MB |
-| macOS, Intel | `AhoosAI-Studio-3.0.0-macos-x64.dmg` | 299 MB |
-| Linux, x86-64 | `AhoosAI-Studio-3.0.0-linux-x64.tar.gz` | 370 MB |
+| Windows 10 / 11, 64-bit | `AhoosAI-Studio-3.0.1-windows-x64.zip` | 307 MB |
+| macOS, Apple silicon (M1 and later) | `AhoosAI-Studio-3.0.1-macos-arm64.dmg` | 295 MB |
+| macOS, Intel | `AhoosAI-Studio-3.0.1-macos-x64.dmg` | 299 MB |
+| Linux, x86-64 | `AhoosAI-Studio-3.0.1-linux-x64.tar.gz` | 370 MB |
 
 Unpack it and run **AhoosAI Studio**. With no model yet, it opens on the Models page.
 
@@ -58,8 +59,8 @@ For writing code, use **Nimbus 1.1 at q4_k_m** or larger if your computer has th
 
 Every file's SHA-256 is in `SHA256SUMS.txt`, attached below.
 
-- Windows: `certutil -hashfile AhoosAI-Studio-3.0.0-windows-x64.zip SHA256`
-- macOS / Linux: `shasum -a 256 AhoosAI-Studio-3.0.0-*`
+- Windows: `certutil -hashfile AhoosAI-Studio-3.0.1-windows-x64.zip SHA256`
+- macOS / Linux: `shasum -a 256 AhoosAI-Studio-3.0.1-*`
 
 ## Security warnings on first run
 
@@ -106,16 +107,17 @@ Run the new package in place of the old one. Your models, settings and conversat
 - در ویندوز، دستورهایی که مسیرشان داخل گیومه بود (`python "my script.py"`) در ۲٫۵ اجرا نمی‌شدند؛ حالا می‌شوند.
 - اگر Smart App Control ویندوز موتور مدل را مسدود کند، برنامه همین را می‌گوید و اینکه چه کاری از دستتان برمی‌آید، به‌جای «مدل هنگام بارگذاری متوقف شد».
 - بعضی درایورهای کارت گرافیک وقتی مدل در تکه‌های یک گیگابایتی روی کارت گذاشته شود، کارت را از دست می‌دهند — یک GTX 1050 Ti با درایور سال ۲۰۲۲ از نُه لایه به بعد همین‌طور بود. حالا مدل در تکه‌های ۵۱۲ مگابایتی روی کارت می‌رود که همه‌ی کارت‌ها می‌پذیرند.
+- در ویندوز، موتور مدل و همه‌ی سرورهایی که برنامه راه انداخته، با بسته شدن برنامه بسته می‌شوند، به هر شکلی که بسته شود — عادی، با خطا، یا از Task Manager. پیش از این، برنامه‌ای که این‌طور بسته می‌شد موتور را روشن می‌گذاشت و چند گیگابایت حافظه و کارت گرافیک را نگه می‌داشت.
 - جمع‌بندی آخر کار به همان زبانی است که پرسیده‌اید.
 
 ## دانلود
 
 | سیستم | فایل | حجم |
 |---|---|---|
-| ویندوز ۱۰ / ۱۱، ۶۴ بیتی | `AhoosAI-Studio-3.0.0-windows-x64.zip` | ۳۰۷ مگابایت |
-| مک، اپل سیلیکون (M1 به بعد) | `AhoosAI-Studio-3.0.0-macos-arm64.dmg` | ۲۹۵ مگابایت |
-| مک، اینتل | `AhoosAI-Studio-3.0.0-macos-x64.dmg` | ۲۹۹ مگابایت |
-| لینوکس، x86-64 | `AhoosAI-Studio-3.0.0-linux-x64.tar.gz` | ۳۷۰ مگابایت |
+| ویندوز ۱۰ / ۱۱، ۶۴ بیتی | `AhoosAI-Studio-3.0.1-windows-x64.zip` | ۳۰۷ مگابایت |
+| مک، اپل سیلیکون (M1 به بعد) | `AhoosAI-Studio-3.0.1-macos-arm64.dmg` | ۲۹۵ مگابایت |
+| مک، اینتل | `AhoosAI-Studio-3.0.1-macos-x64.dmg` | ۲۹۹ مگابایت |
+| لینوکس، x86-64 | `AhoosAI-Studio-3.0.1-linux-x64.tar.gz` | ۳۷۰ مگابایت |
 
 فایل را باز کنید و **AhoosAI Studio** را اجرا کنید. اگر هنوز مدلی نصب نشده باشد، برنامه با صفحه‌ی مدل‌ها باز می‌شود.
 

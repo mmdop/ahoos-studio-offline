@@ -46,6 +46,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from . import tether
+
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "env", ".idea", ".vscode",
              ".next", ".nuxt", "dist", "build", ".mypy_cache", ".pytest_cache", ".tox", "target",
              ".gradle", "Pods", ".cache", ".ahoos"}
@@ -386,6 +388,7 @@ def run_command(ctx: Context, args: dict) -> Result:
             shell_for(command), cwd=str(ctx.folder), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", bufsize=1,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        tether.tie(process)
     except OSError as error:
         return Result(False, f"Could not run it: {error}", f"`{command[:60]}` could not start")
     lines: list[str] = []

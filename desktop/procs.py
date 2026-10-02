@@ -24,6 +24,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import tether
 from .terminal import kill_tree, shell_for
 
 # What a command line that starts a server usually looks like.
@@ -82,6 +83,7 @@ class Procs:
             shell_for(command), cwd=str(folder), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", bufsize=1,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        tether.tie(process)
         return self.adopt(command, folder, process)
 
     def adopt(self, command: str, folder: Path, process: subprocess.Popen, lines: list[str] | None = None,

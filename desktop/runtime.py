@@ -38,6 +38,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import tether
 
 class RuntimeError_(RuntimeError):
     """The model server could not be started, or died."""
@@ -211,6 +212,7 @@ class ModelServer:
             creationflags=creation,
             env=env,
         )
+        tether.tie(self.process)      # ends with the app, however the app ends
 
         def pump() -> None:
             assert self.process and self.process.stdout

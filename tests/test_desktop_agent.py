@@ -22,7 +22,7 @@ from unittest import mock
 
 from desktop import checks, hub, procs, writer
 from desktop import tools as T
-from desktop.agent import Plan, Profile, Turn, language_of, partial_strings, plan_from_args, slug
+from desktop.agent import Plan, Profile, Turn, language_of, partial_strings, plan_from_args, slug, unprefix
 from desktop.app import inside
 from desktop.battle import Battles
 from desktop.chats import Chats
@@ -36,6 +36,19 @@ PY = f'"{sys.executable}"'
 
 
 class Folder(unittest.TestCase):
+
+    def test_a_folder_named_twice_is_written_once(self):
+        plan = plan_from_args({"goal": "a to-do list", "folder": "todo-list", "steps": [
+            {"do": "create", "path": "todo-list/index.html", "detail": "the page, todo-list/index.html"},
+            {"do": "create", "path": "todo-list/app.js", "detail": "the script"},
+            {"do": "run", "path": "", "detail": "open it"}]})
+        unprefix(plan, "todo-list")
+        self.assertEqual([s.path for s in plan.steps], ["index.html", "app.js", ""])
+        self.assertEqual((plan.steps[0].title, plan.steps[0].detail), ("index.html", "the page, index.html"))
+        kept = plan_from_args({"steps": [{"do": "create", "path": "site/index.html"},
+                                         {"do": "create", "path": "README.md"}]})
+        unprefix(kept, "site")
+        self.assertEqual([s.path for s in kept.steps], ["site/index.html", "README.md"])
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp()) / "demo"
         self.root.mkdir()
@@ -382,6 +395,35 @@ class Runtime(unittest.TestCase):
                 self.assertEqual(popen.call_args.kwargs["env"]["GGML_VK_SUBALLOCATION_BLOCK_SIZE"], "268435456")
         finally:
             shutil.rmtree(folder, ignore_errors=True)
+
+
+class Tether(unittest.TestCase):
+    PARENT = (
+        "import subprocess, sys, time\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "from desktop import tether\n"
+        "child = subprocess.Popen(['ping', '-n', '60', '127.0.0.1'], stdout=subprocess.DEVNULL)\n"
+        "print(child.pid, tether.tie(child), flush=True)\n"
+        "time.sleep(60)\n")
+
+    @unittest.skipUnless(os.name == "nt", "a job object is Windows'")
+    def test_a_child_ends_when_the_app_is_killed(self):
+        import subprocess
+        root = str(Path(__file__).resolve().parents[1])
+        parent = subprocess.Popen([sys.executable, "-c", self.PARENT, root], stdout=subprocess.PIPE, text=True)
+        pid, tied = parent.stdout.readline().split()
+        parent.stdout.close()
+        self.assertEqual(tied, "True")
+        parent.kill()                    # TerminateProcess: nothing in the parent runs
+        parent.wait()
+        for _ in range(20):
+            listed = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True).stdout
+            if pid not in listed:
+                break
+            time.sleep(0.25)
+        else:
+            subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
+            self.fail("the child outlived the app")
 
 
 class AgentTurn(unittest.TestCase):

@@ -201,6 +201,27 @@ def plan_from_args(args: dict) -> Plan:
     return Plan(goal=str(args.get("goal") or "").strip()[:300], steps=steps, folder=str(args.get("folder") or ""))
 
 
+def unprefix(plan: Plan, folder: str) -> None:
+    """`todo-list/index.html`, planned for a project that goes into `todo-list/` itself.
+
+    A model that names the project's folder writes it into the paths as well,
+    and the files would land in `todo-list/todo-list/`. Only when every file
+    step carries it: a project that really keeps its pages in a subfolder of
+    the same name as its own has some file outside it, a README at least.
+    """
+    name = folder.lower()
+    paths = [step.path for step in plan.steps if step.path]
+    if not name or not paths or not all(path.lower().startswith(name + "/") for path in paths):
+        return
+    for step in plan.steps:
+        if step.path:
+            short = step.path[len(name) + 1:]
+            if step.title == step.path:
+                step.title = short
+            step.detail = step.detail.replace(step.path, short)
+            step.path = short
+
+
 # -- what the model is told ----------------------------------------------------------------
 
 def environment(profile: Profile, folder: Path | None, web_label: str, tools: list[T.Tool], *, files: bool,
@@ -1262,6 +1283,7 @@ class Turn:
                 self.folder = Path(last).resolve()
                 self.ctx.folder = self.folder
         target = self._target_folder(self.plan)
+        unprefix(self.plan, (target or self.folder or Path()).name)
         self.emit("plan", {"plan": self.plan.to_dict(), "folder": str(target or self.folder or "")})
         if self.plan_only:
             return self._plan_reply()

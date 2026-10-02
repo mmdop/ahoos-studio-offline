@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from queue import Empty, Queue
 
+from . import tether
+
 TIMEOUT = 600.0                 # seconds one command may take before it is stopped
 MAX_LINE = 4000
 MAX_LINES = 2000                # what one command may send back before it is cut
@@ -123,6 +125,7 @@ class Shell:
                     errors="replace", bufsize=1,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
+                tether.tie(self.process)
             except OSError as error:
                 out.put({"error": f"could not run it: {error}"})
                 out.put(None)

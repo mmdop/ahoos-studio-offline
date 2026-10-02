@@ -313,7 +313,7 @@
       <div class="side-head">
         <div class="brand"><svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg>
           <div class="name">AhoosAI Studio<small>${t('offline_tag')}</small></div>
-          <span class="ver ltr">${esc((S.status && S.status.version) || '3.0.0')}</span></div>
+          <span class="ver ltr">${esc((S.status && S.status.version) || '3.0.1')}</span></div>
         <button class="icon-btn" id="hideSide" title="${t('hide_sidebar')} (Ctrl+B)">${ic('sidebar')}</button>
       </div>
       <button class="new-chat" id="newChat"><span class="plus">${ic('plus', 'sm')}</span>${t('new_chat')}<kbd class="ltr">Ctrl N</kbd></button>

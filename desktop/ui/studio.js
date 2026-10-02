@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   AhoosAI Studio 2.5 -- the page.
+   AhoosAI Studio 3.0 -- the page.
 
    One file, no framework, no build step: the studio runs offline and is
    debugged in place. Four views -- chat, battle, models, settings -- over one
@@ -313,7 +313,7 @@
       <div class="side-head">
         <div class="brand"><svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg>
           <div class="name">AhoosAI Studio<small>${t('offline_tag')}</small></div>
-          <span class="ver ltr">${esc((S.status && S.status.version) || '2.5.0')}</span></div>
+          <span class="ver ltr">${esc((S.status && S.status.version) || '3.0.0')}</span></div>
         <button class="icon-btn" id="hideSide" title="${t('hide_sidebar')} (Ctrl+B)">${ic('sidebar')}</button>
       </div>
       <button class="new-chat" id="newChat"><span class="plus">${ic('plus', 'sm')}</span>${t('new_chat')}<kbd class="ltr">Ctrl N</kbd></button>
@@ -443,11 +443,11 @@
     const top = $('#top');
     if (!S.status) return;
     const st = S.status;
-    const sig = [st.state, st.profile, st.active, st.folder, (st.internet || {}).mode, settingsOf().web_on, settingsOf().theme];
+    const sig = [st.state, st.profile, st.active, currentFolder(), (st.internet || {}).mode, settingsOf().web_on, settingsOf().theme];
     if (!changed('top', sig) && !force && top.childElementCount) return;
     if (openPop && top.contains(openPop.anchor)) closePop();
     const base = st.bases.find(b => b.key === st.active.base);
-    const folderName = st.folder ? st.folder.split(/[\\/]/).filter(Boolean).pop() : '';
+    const folderName = currentFolder() ? currentFolder().split(/[\\/]/).filter(Boolean).pop() : '';
     const internet = (st.internet || {}).mode || 'off';
     const webOn = internet !== 'off' && settingsOf().web_on;
     const theme = settingsOf().theme || 'system';
@@ -458,7 +458,7 @@
         ${base && base.quant ? `<span class="q ltr">${esc(base.quant)}</span>` : ''}
         ${st.state !== 'ready' ? `<span class="state ${st.state}">${esc({ loading: t('state_loading'), failed: t('state_failed'), missing: t('state_missing') }[st.state] || '')}</span>` : ''}${ic('chev', 'sm chev')}</button>
       <span class="spacer"></span>
-      <button class="chip${folderName ? ' on' : ' warn'}" id="folderChip" title="${esc(st.folder || t('no_folder'))}">${ic('folder', 'sm')}<span class="lbl" dir="auto">${esc(folderName || t('connect_folder'))}</span></button>
+      <button class="chip${folderName ? ' on' : ' warn'}" id="folderChip" title="${esc(currentFolder() || t('no_folder'))}">${ic('folder', 'sm')}<span class="lbl" dir="auto">${esc(folderName || t('connect_folder'))}</span></button>
       <button class="chip${webOn ? ' on' : internet === 'off' ? ' warn' : ''}" id="webChip" title="${t('web_chip_title')}">${ic(internet === 'off' ? 'off' : 'globe', 'sm')}<span class="lbl">${webOn ? t('web_on') : internet === 'off' ? t('web_off') : t('web_ready')}</span></button>
       <button class="icon-btn" id="langBtn" title="${t('language')}"><b style="font-size:12px">${S.lang === 'fa' ? 'EN' : 'فا'}</b></button>
       <button class="icon-btn" id="themeBtn" title="${t('theme')}">${ic({ system: 'monitor', light: 'sun', dark: 'moon' }[theme])}</button>`;
@@ -529,11 +529,11 @@
   }
 
   function folderMenu(anchor) {
-    const st = S.status;
+    const folder = currentFolder();
     const menu = h('<div></div>');
-    if (st.folder) {
+    if (folder) {
       menu.appendChild(h(`<div class="pop-h">${t('working_folder')}</div>`));
-      menu.appendChild(h(`<div style="padding:2px 10px 8px;font-family:var(--mono);font-size:12px;color:var(--muted);direction:ltr;text-align:start;word-break:break-all">${esc(st.folder)}</div>`));
+      menu.appendChild(h(`<div style="padding:2px 10px 8px;font-family:var(--mono);font-size:12px;color:var(--muted);direction:ltr;text-align:start;word-break:break-all">${esc(folder)}</div>`));
     } else {
       menu.appendChild(h(`<div style="padding:10px 10px 6px;max-width:300px"><b>${t('no_folder_title')}</b><div class="muted" style="font-size:12.5px;margin-top:4px">${t('no_folder_text')}</div></div>`));
     }
@@ -542,14 +542,16 @@
       b.onclick = () => { closePop(); fn(); };
       menu.appendChild(b);
     };
-    add('folder', st.folder ? t('change_folder') : t('choose_folder'), pickFolder);
-    if (st.folder) {
-      add('external', t('open_in_explorer'), () => api('/local/open-folder?which=work', {}).catch(fail));
+    add('folder', folder ? t('change_folder') : t('choose_folder'), pickFolder);
+    if (folder) {
+      add('external', t('open_in_explorer'), () => api('/local/open-project', { folder }).catch(fail));
       add('terminal', t('terminal'), toggleTerminal);
       menu.appendChild(h('<hr>'));
       add('x', t('disconnect_folder'), async () => {
-        await api('/local/set-folder', { folder: '' }).catch(fail);
-        refresh();
+        await api('/local/set-folder', { folder: '', chat_id: S.chatId || '' }).catch(fail);
+        if (S.chat) S.chat.folder = '';
+        await refresh();
+        renderTop(true);
         renderEmpty();
       }, 'danger');
     }
@@ -557,17 +559,26 @@
   }
 
   async function pickFolder() {
+    // The folder chosen in a conversation becomes that conversation's project.
+    const keep = async folder => {
+      if (S.chatId) {
+        await api('/local/set-folder', { folder, chat_id: S.chatId }).catch(() => {});
+        if (S.chat) S.chat.folder = folder;
+      }
+      toast(t('folder_connected', { name: folder }), 'ok');
+      await refresh();
+      renderTop(true);
+      renderEmpty();
+    };
     try {
       const answer = await api('/local/pick-folder', {});
-      if (answer.folder) { toast(t('folder_connected', { name: answer.folder }), 'ok'); await refresh(); renderEmpty(); }
+      if (answer.folder) await keep(answer.folder);
     } catch (e) {
-      const typed = await ask(t('folder_path_q'), S.status.folder || '', 'C:\\Projects\\my-app');
+      const typed = await ask(t('folder_path_q'), currentFolder() || '', 'C:\\Projects\\my-app');
       if (!typed) return;
       try {
         await api('/local/set-folder', { folder: typed });
-        toast(t('folder_connected', { name: typed }), 'ok');
-        await refresh();
-        renderEmpty();
+        await keep(typed);
       } catch (inner) { fail(inner); }
     }
   }
@@ -655,7 +666,7 @@
     const foot = $('#foot');
     const memory = st.memory || 0;
     foot.innerHTML = `<span>${ic('brain', 'sm')}${memory ? t('memory_n', { n: num(memory) }) : t('memory_off')}</span>
-      <span>${ic('shield', 'sm')}${st.permission === 'session' ? t('perm_session_short') : t('perm_ask_short')}</span>
+      <span>${ic('shield', 'sm')}${st.permission === 'auto' ? t('perm_auto_short') : st.permission === 'session' ? t('perm_session_short') : t('perm_ask_short')}</span>
       <span class="ltr" style="direction:inherit">${t('enter_hint')}</span>`;
     setSending(!!S.run);
   }
@@ -789,7 +800,7 @@
     const hasChat = S.chat && S.chat.messages.length;
     empty.style.display = hasChat || S.run ? 'none' : '';
     if (hasChat || S.run) return;
-    const folderName = st.folder ? st.folder.split(/[\\/]/).filter(Boolean).pop() : '';
+    const folderName = currentFolder() ? currentFolder().split(/[\\/]/).filter(Boolean).pop() : '';
     const internet = (st.internet || {}).mode || 'off';
     const ideas = st.folder
       ? [['book', 'idea_explain', 'idea_explain_p'], ['bug', 'idea_bugs', 'idea_bugs_p'],
@@ -848,13 +859,14 @@
 
   function botShell(name) {
     return h(`<article class="msg bot"><div class="bubble">
-      <div class="slot-think"></div><div class="steps"></div><div class="content" dir="auto"></div><div class="slot-foot"></div>
+      <div class="slot-think"></div><div class="slot-plan"></div><div class="steps"></div><div class="slot-check"></div><div class="content" dir="auto"></div><div class="slot-foot"></div>
       <div class="meta"><span class="tag" dir="auto">${esc(name)}</span><span class="stats"></span><span class="sp"></span><span class="acts"></span></div></div></article>`);
   }
 
   function botEl(m, last) {
     const el = botShell(m.model || '');
     if (m.think) $('.slot-think', el).appendChild(thinkEl(m.think, false, m));
+    if (m.plan) $('.slot-plan', el).appendChild(planEl(m.plan, m.folder));
     for (const step of m.steps || []) $('.steps', el).appendChild(stepFromRecord(step));
     const content = $('.content', el);
     content.innerHTML = window.MD.render(m.content || '');
@@ -876,18 +888,52 @@
     foot.innerHTML = '';
     if (m.error) foot.appendChild(h(`<div class="note bad">${ic('alert', 'sm')} ${esc(m.error)}</div>`));
     if (m.stopped) foot.appendChild(h(`<div class="note warn">${t('stopped_note')}</div>`));
-    if (m.plan && last && !m.error) {
-      const go = h(`<button class="btn primary sm plan-go">${ic('play', 'sm')}${t('carry_out_plan')}</button>`);
-      go.onclick = () => send(t('carry_out_plan_msg'), { plan: false });
-      foot.appendChild(go);
+    if (m.ran_out && !m.undone) foot.appendChild(h(`<div class="note warn">${ic('info', 'sm')} ${t('ran_out_note')}</div>`));
+    if (m.problems && m.problems.length && !m.undone) {
+      foot.appendChild(h(`<div class="note warn problems"><b>${t('check_left')}</b><ul dir="ltr">${m.problems.map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>`));
     }
+    if (m.undone) foot.appendChild(h(`<div class="note">${ic('undo', 'sm')} ${t('undone_note')}</div>`));
+    const acts = h('<div class="turn-acts"></div>');
+    const steps = (m.plan && m.plan.steps) || [];
+    const unfinished = steps.some(s => s.status === 'pending' || s.status === 'active');
+    if (last && m.plan && !m.undone && (unfinished || m.plan_only)) {
+      const go = h(`<button class="btn primary sm">${ic('play', 'sm')}${m.plan_only ? t('carry_out_plan') : t('continue_btn')}</button>`);
+      go.onclick = () => send(t('continue_msg'), { resume: true, plan: false });
+      acts.appendChild(go);
+    }
+    if (m.try && m.try.page && !m.undone) {
+      const open = h(`<button class="btn sm">${ic('external', 'sm')}${t('open_page')}</button>`);
+      open.onclick = () => api('/local/open-file', { folder: m.folder, path: m.try.page }).catch(fail);
+      acts.appendChild(open);
+    }
+    if (m.folder) {
+      const where = h(`<button class="btn sm ghost">${ic('folder', 'sm')}${t('open_project')}</button>`);
+      where.title = m.folder;
+      where.onclick = () => api('/local/open-project', { folder: m.folder }).catch(fail);
+      acts.appendChild(where);
+    }
+    if (m.checkpoint && !m.undone && m.id) {
+      const undo = h(`<button class="btn sm ghost danger">${ic('undo', 'sm')}${t('undo_btn')}</button>`);
+      undo.onclick = async () => {
+        const yes = await modal({ title: t('undo_btn'), text: t('undo_q', { n: num((m.changes || []).length) }), ok: t('undo_ok'), danger: true });
+        if (!yes) return;
+        try {
+          const done = await api('/local/undo', { chat_id: S.chatId, message_id: m.id });
+          m.undone = true;
+          toast(t('undo_done', { n: num(done.restored.length) }), 'ok');
+          finishFoot(el, m, last);
+        } catch (e) { fail(e); }
+      };
+      acts.appendChild(undo);
+    }
+    if (acts.childElementCount) foot.appendChild(acts);
     const stats = m.stats || {};
     $('.meta .stats', el).textContent = stats.seconds ? t('stats', { s: num(stats.seconds, 1), n: num(stats.tokens), tps: num(stats.tps, 1) }) : '';
-    const acts = $('.meta .acts', el);
-    acts.innerHTML = `<button data-a="copy">${ic('copy', 'sm')}${t('copy')}</button>`
+    const metaActs = $('.meta .acts', el);
+    metaActs.innerHTML = `<button data-a="copy">${ic('copy', 'sm')}${t('copy')}</button>`
       + (last ? `<button data-a="retry">${ic('refresh', 'sm')}${t('answer_again')}</button>` : '');
-    $('[data-a="copy"]', acts).onclick = e => copy(m.content || '', e.currentTarget);
-    const retry = $('[data-a="retry"]', acts);
+    $('[data-a="copy"]', metaActs).onclick = e => copy(m.content || '', e.currentTarget);
+    const retry = $('[data-a="retry"]', metaActs);
     if (retry) retry.onclick = () => answerAgain(el);
   }
 
@@ -932,10 +978,56 @@
     if (force || near) scroller.scrollTop = scroller.scrollHeight;
   }
 
+  /* ---- plans (3.0) ------------------------------------------------------------------- */
+
+  function currentFolder() { return (S.chat && S.chat.folder) || (S.status && S.status.folder) || ''; }
+
+  function planEl(plan, folder) {
+    const node = h(`<div class="plan-card"><div class="plan-head">${ic('plan', 'sm')}<b class="goal" dir="auto"></b>
+      <span class="count"></span></div><ol class="plan-steps"></ol><div class="plan-where ltr"></div><div class="plan-acts"></div></div>`);
+    paintPlan(node, plan, folder);
+    return node;
+  }
+  function paintPlan(node, plan, folder) {
+    if (!plan) return;
+    $('.goal', node).textContent = plan.request || plan.goal || t('plan_title');
+    $('.goal', node).title = plan.goal || '';
+    const list = $('.plan-steps', node);
+    list.innerHTML = '';
+    (plan.steps || []).forEach((step, i) => list.appendChild(planStepEl(step, i)));
+    $('.plan-where', node).textContent = folder || '';
+    paintPlanCount(node, plan);
+  }
+  function planStepEl(step, i) {
+    // A file step reads as a verb and the file, in the page's language; the
+    // model's sentence about it is the tooltip. Other steps read as that sentence.
+    const verb = { create: t('do_create'), edit: t('do_edit'), run: t('do_run'), fix: '' }[step.do] || '';
+    const label = step.do === 'fix' || !step.path ? (step.do === 'fix' ? step.title : step.detail || step.title) : verb;
+    const li = h(`<li data-status="${esc(step.status || 'pending')}" data-i="${i}"><span class="mark"></span>
+      <span class="ttl" dir="auto"></span>${step.path ? `<code class="ltr">${esc(step.path)}</code>` : ''}</li>`);
+    $('.ttl', li).textContent = label || '';
+    li.dataset.detail = step.detail || '';
+    paintMark(li);
+    if (step.detail) li.title = step.detail;
+    return li;
+  }
+  function paintMark(li) {
+    const status = li.dataset.status || 'pending';
+    $('.mark', li).innerHTML = status === 'active' ? '<span class="spinner"></span>'
+      : status === 'pending' ? '' : ic({ done: 'check', failed: 'alert', skipped: 'minus' }[status] || 'check', 'sm');
+    if (!li.dataset.detail) li.title = t('st_' + status);
+  }
+  function paintPlanCount(node, plan) {
+    const steps = plan.steps || [];
+    const done = steps.filter(s => s.status === 'done').length;
+    $('.count', node).textContent = steps.length ? t('plan_count', { done: num(done), total: num(steps.length) }) : '';
+  }
+
   /* ---- tool cards ------------------------------------------------------------------- */
 
   const TOOL_ICON = { list_files: 'list', read_file: 'file', search_files: 'search', write_file: 'file-plus',
-                      edit_file: 'file-edit', delete_file: 'trash', run_command: 'terminal', web_search: 'globe', fetch_url: 'link' };
+                      edit_file: 'file-edit', delete_file: 'trash', run_command: 'terminal', web_search: 'globe', fetch_url: 'link',
+                      open_file: 'external', stop_command: 'stop' };
   function host(url) { try { return new URL(url).hostname; } catch (e) { return url || ''; } }
   function toolTitle(name, args, state, meta) {
     args = args || {};
@@ -946,6 +1038,7 @@
       search_files: ['t_search_run', 't_search_done'], write_file: ['t_write_run', meta.created === false ? 't_update_done' : 't_write_done'],
       edit_file: ['t_edit_run', 't_edit_done'], delete_file: ['t_delete_run', 't_delete_done'],
       run_command: ['t_cmd_run', 't_cmd_done'], web_search: ['t_web_run', 't_web_done'], fetch_url: ['t_fetch_run', 't_fetch_done'],
+      open_file: ['t_open_run', 't_open_done'], stop_command: ['t_stop_run', 't_stop_done'],
     }[name] || ['t_tool', 't_tool'];
     const key = state === 'done' ? map[1] : map[0];
     return t(key, {
@@ -956,6 +1049,7 @@
   function toolSub(step) {
     const meta = step.meta || {};
     if (step.status === 'refused') return t('refused');
+    if (step.name === 'run_command' && meta.background) return t('bg_running');
     if (step.name === 'run_command' && meta.code != null) return (meta.code === 0 ? t('exit_ok') : t('exit_code', { n: meta.code })) + ' · ' + num(meta.seconds, 1) + 's';
     if (step.name === 'write_file' && meta.lines) return t('n_lines', { n: num(meta.lines) });
     if (step.name === 'web_search' && meta.results) return t('n_results', { n: num(meta.results.length) });
@@ -987,6 +1081,16 @@
       inner.appendChild(list);
       return inner;
     }
+    if (step.name === 'run_command' && meta.background) {
+      const bar = h(`<div class="bg-bar"><span class="spinner"></span><span>${t('bg_running')}</span>
+        ${meta.url ? `<a href="${esc(meta.url)}" class="ltr">${esc(meta.url)}</a>` : ''}<span class="grow"></span>
+        <button class="btn sm">${ic('stop', 'sm')}${t('bg_stop')}</button></div>`);
+      $('button', bar).onclick = async () => {
+        try { await api('/local/procs/' + encodeURIComponent(meta.background) + '/stop', {}); } catch (e) { fail(e); return; }
+        bar.innerHTML = `${ic('check', 'sm')}<span>${t('bg_stopped')}</span>`;
+      };
+      inner.appendChild(bar);
+    }
     const output = step.output || '';
     if (!output) return inner;
     const pre = h('<pre dir="ltr"></pre>');
@@ -1017,7 +1121,7 @@
     content.classList.add('live');
     const reading = h(`<div class="reading"><span class="dots">${t('reading_prompt').replace(/…$/, '')}</span><span class="bar"><i></i></span><span class="pct"></span></div>`);
     $('.slot-think', el).before(reading);
-    let text = '', think = '', thinkNode = null, frame = 0;
+    let text = '', think = '', thinkNode = null, frame = 0, planNode = null, planData = null;
     const steps = {};
     const paint = () => {
       frame = 0;
@@ -1054,6 +1158,48 @@
         $('.lbl', thinkNode).innerHTML = esc(t('reasoning_words', { n: num(d.words || 0) }))
           + (d.target ? ' · ' + esc(t('target_words', { n: num(d.target) })) : '')
           + (d.forced ? ` · <span class="over">${t('closed_at_ceiling')}</span>` : '');
+      },
+      planning(d) {
+        hideReading();
+        if (planData) return;
+        if (!planNode) {
+          planNode = planEl({ goal: '', steps: [] });
+          planNode.classList.add('drafting');
+          $('.slot-plan', el).appendChild(planNode);
+        }
+        $('.goal', planNode).textContent = t('planning');
+        $('.plan-steps', planNode).innerHTML = (d.paths || []).filter(Boolean).map(x =>
+          `<li data-status="pending"><span class="mark"></span><span class="ttl"></span><code class="ltr">${esc(x)}</code></li>`).join('');
+        scrollDown(false);
+      },
+      plan(d) {
+        hideReading();
+        planData = d.plan;
+        if (!planNode) { planNode = planEl(planData, d.folder); $('.slot-plan', el).appendChild(planNode); }
+        else { planNode.classList.remove('drafting'); paintPlan(planNode, planData, d.folder || $('.plan-where', planNode).textContent); }
+        scrollDown(false);
+      },
+      planStep(d) {
+        if (!planNode || !planData) return;
+        const step = planData.steps[d.index];
+        if (step) { step.status = d.status; step.note = d.note; }
+        const li = $(`li[data-i="${d.index}"]`, planNode);
+        if (li) { li.dataset.status = d.status; paintMark(li); }
+        paintPlanCount(planNode, planData);
+      },
+      check(d) {
+        const slot = $('.slot-check', el);
+        const problems = d.problems || [];
+        slot.innerHTML = problems.length
+          ? `<div class="note warn">${ic('alert', 'sm')} ${t('check_found', { n: num(problems.length) })}<ul dir="ltr">${problems.slice(0, 8).map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>`
+          : `<div class="note ok">${ic('check', 'sm')} ${t('check_ok')}</div>`;
+        scrollDown(false);
+      },
+      folder(d) {
+        if (S.chat && (!S.run || S.run.chatId === S.chat.id)) S.chat.folder = d.path;
+        if (planNode) $('.plan-where', planNode).textContent = d.path;
+        toast(t('project_folder', { path: d.path }), 'info', 4000);
+        renderTop(true);
       },
       toolStart(d) {
         hideReading();
@@ -1104,6 +1250,27 @@
         pre.scrollTop = pre.scrollHeight;
       },
       ask(d) {
+        if (d.name === 'plan') {
+          if (!planNode || !planData) this.plan({ plan: d.plan, folder: d.folder });
+          const box = h(`<div class="ask plan-ask" data-ask="${esc(d.ask_id)}"><div class="q">${ic('shield', 'sm')}${t('plan_ask')}</div>
+            <div class="acts"><button class="btn primary sm" data-a="allow">${ic('play', 'sm')}${t('plan_run')}</button>
+            ${d.session ? `<button class="btn sm" data-a="session">${t('allow_session')}</button>` : ''}
+            <button class="btn ghost danger sm" data-a="deny">${t('plan_no')}</button></div><div class="said"></div></div>`);
+          $$('.acts button', box).forEach(b => {
+            b.onclick = async () => {
+              $$('.acts button', box).forEach(x => { x.disabled = true; });
+              try { await api('/local/answer', { ask_id: d.ask_id, answer: b.dataset.a }); } catch (e) { fail(e); }
+            };
+          });
+          $('.plan-acts', planNode).appendChild(box);
+          scrollDown(true);
+          if (!document.hasFocus()) {
+            const title = document.title;
+            document.title = '● ' + t('needs_you');
+            window.addEventListener('focus', () => { document.title = title; }, { once: true });
+          }
+          return;
+        }
         if (!steps[d.id]) this.toolStart({ id: d.id, name: d.name });
         const s = step(d.id);
         s.node.dataset.status = 'asking';
@@ -1202,7 +1369,7 @@
     renderEmpty();
     scrollDown(true);
     paintComposer();
-    await stream({ chat_id: S.chatId, prompt: text, attachments, plan, web: !!settingsOf().web_on }, live);
+    await stream({ chat_id: S.chatId, prompt: text, attachments, plan, resume: !!options.resume, web: !!settingsOf().web_on }, live);
   }
 
   async function answerAgain(node) {
@@ -1236,6 +1403,11 @@
           case 'progress': live.progress(d.done, d.total); break;
           case 'think': live.think(d.text); break;
           case 'think_end': live.thinkEnd(d); break;
+          case 'planning': live.planning(d); break;
+          case 'plan': live.plan(d); break;
+          case 'plan_step': live.planStep(d); break;
+          case 'check': live.check(d); break;
+          case 'folder': live.folder(d); break;
           case 'tool_start': live.toolStart(d); break;
           case 'tool_args': live.toolArgs(d); break;
           case 'tool_call': live.toolCall(d); break;
@@ -1616,7 +1788,7 @@
   function updateModels(force) {
     if (!$('#mRunning')) return;
     const st = S.status;
-    const sig = [st.state, st.error, st.state === 'loading' ? st.log : '', st.profile, st.active, st.bases, st.adapters,
+    const sig = [st.state, st.error, st.error_kind, st.state === 'loading' ? st.log : '', st.profile, st.active, st.bases, st.adapters,
                  st.builds.map(b => [b.installed, b.partial_bytes > 0]), (st.jobs || []).map(j => [j.id, j.state])];
     if (!changed('models', sig) && !force) { paintJobs(); return; }
     const said = { ready: t('state_ready'), loading: t('state_loading'), failed: t('state_failed'), missing: t('state_missing') }[st.state];
@@ -1626,7 +1798,9 @@
       <span class="badge ${st.state === 'ready' ? 'ok' : st.state === 'failed' ? 'bad' : 'warn'}">${esc(said)}</span>
       <button class="btn sm" id="restartBtn">${ic('refresh', 'sm')}${t('restart')}</button>
       <button class="btn sm ghost" id="openModels">${ic('folder', 'sm')}${t('open_folder')}</button></div>
-      ${st.state === 'failed' || st.state === 'loading' ? `<div class="log">${esc(st.state === 'failed' ? st.error : st.log || t('state_loading'))}</div>` : ''}</div>`;
+      ${st.state === 'failed' && st.error_kind === 'blocked'
+        ? `<div class="note bad blocked"><b>${t('blocked_title')}</b><p>${t('blocked_text')}</p><p>${t('blocked_how')}</p></div>`
+        : st.state === 'failed' || st.state === 'loading' ? `<div class="log">${esc(st.state === 'failed' ? st.error : st.log || t('state_loading'))}</div>` : ''}</div>`;
     $('#restartBtn').onclick = () => api('/local/restart', {}).then(s => { S.status = s; paintStatus(null); }).catch(fail);
     $('#openModels').onclick = () => api('/local/open-folder?which=models', {}).catch(fail);
 
@@ -1995,22 +2169,25 @@
     const agent = st.agent || {};
     box.innerHTML = `<h2>${ic('shield')}${t('s_agent')}</h2><p>${t('agent_lead')}</p>`;
     box.appendChild(srow(t('permission'), t('permission_p'),
-      seg([['ask', t('perm_ask')], ['session', t('perm_session')]], st.permission, v => setting({ permission: v }, true).then(paintComposer))));
+      seg([['ask', t('perm_ask')], ['session', t('perm_session')], ['auto', t('perm_auto')]], st.permission, v => setting({ permission: v }, true).then(paintComposer))));
     box.appendChild(srow(t('tool_files'), t('tool_files_p'), switcher(agent.files !== false, v => setting({ agent: { files: v } }, true))));
     box.appendChild(srow(t('tool_commands'), t('tool_commands_p'), switcher(agent.commands !== false, v => setting({ agent: { commands: v } }, true))));
-    const steps = h(`<input class="input" type="number" min="1" max="30" value="${agent.max_steps || 10}" style="width:90px">`);
+    const steps = h(`<input class="input" type="number" min="4" max="120" value="${agent.max_steps || 40}" style="width:90px">`);
     steps.onchange = () => setting({ agent: { max_steps: Number(steps.value) } }, true);
     box.appendChild(srow(t('max_steps'), t('max_steps_p'), steps));
     const timeout = h(`<input class="input" type="number" min="10" max="3600" value="${agent.command_timeout || 120}" style="width:90px">`);
     timeout.onchange = () => setting({ agent: { command_timeout: Number(timeout.value) } }, true);
     box.appendChild(srow(t('cmd_timeout'), t('cmd_timeout_p'), timeout));
+    const where = h(`<span style="display:flex;gap:8px"><input class="input mono" dir="ltr" style="width:260px" value="${esc(st.workspace || '')}" placeholder="${esc(S.status.workspace || '')}"><button class="btn sm">${t('save')}</button></span>`);
+    $('button', where).onclick = () => setting({ workspace: $('input', where).value });
+    box.appendChild(srow(t('workspace'), t('workspace_p'), where));
   }
 
   function paintModelSettings() {
     const box = $('#s-model');
     const st = settingsOf();
     box.innerHTML = `<h2>${ic('cpu')}${t('s_model')}</h2><p>${t('model_lead')}</p>`;
-    const context = h(`<select class="input" style="width:140px">${[4096, 8192, 16384, 32768].map(n => `<option value="${n}"${st.context === n ? ' selected' : ''}>${num(n)}</option>`).join('')}</select>`);
+    const context = h(`<select class="input" style="width:140px">${[4096, 8192, 16384, 32768, 65536].map(n => `<option value="${n}"${st.context === n ? ' selected' : ''}>${num(n)}</option>`).join('')}</select>`);
     context.onchange = () => setting({ context: Number(context.value) }).then(() => toast(t('restarting'), 'info'));
     box.appendChild(srow(t('context'), t('context_p'), context));
     const memory = h(`<select class="input" style="width:140px">${[0, 2, 4, 6, 10, 20].map(n => `<option value="${n}"${st.memory === n ? ' selected' : ''}>${n ? t('n_turns', { n: num(n) }) : t('off')}</option>`).join('')}</select>`);
@@ -2019,6 +2196,8 @@
     const threads = h(`<input class="input" type="number" min="0" max="256" value="${st.threads || 0}" style="width:90px">`);
     threads.onchange = () => setting({ threads: Number(threads.value) }).then(() => toast(t('restarting'), 'info'));
     box.appendChild(srow(t('threads'), t('threads_p', { n: num(S.status.machine.cpus) }), threads));
+    box.appendChild(srow(t('gpu'), t('gpu_p') + (S.status.gpu ? ' ' + esc(t('gpu_now', { what: S.status.gpu })) : ''),
+      seg([['auto', t('gpu_auto')], ['off', t('gpu_off')]], st.gpu || 'auto', v => setting({ gpu: v }).then(() => toast(t('restarting'), 'info')))));
     const gpu = h(`<input class="input" type="number" min="0" max="999" value="${st.gpu_layers || 0}" style="width:90px">`);
     gpu.onchange = () => setting({ gpu_layers: Number(gpu.value) }).then(() => toast(t('restarting'), 'info'));
     box.appendChild(srow(t('gpu_layers'), t('gpu_layers_p'), gpu));

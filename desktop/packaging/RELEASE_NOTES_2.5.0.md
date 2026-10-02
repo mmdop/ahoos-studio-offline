@@ -34,12 +34,12 @@ The model can then search and read pages. Addresses on your own computer or loca
 
 ## Download
 
-| System | File |
-|---|---|
-| Windows 10 / 11, 64-bit | `AhoosAI-Studio-2.5.0-windows-x64.zip` |
-| macOS, Apple silicon (M1 and later) | `AhoosAI-Studio-2.5.0-macos-arm64.dmg` |
-| macOS, Intel | `AhoosAI-Studio-2.5.0-macos-x64.dmg` |
-| Linux, x86-64 | `AhoosAI-Studio-2.5.0-linux-x64.tar.gz` |
+| System | File | Size |
+|---|---|---|
+| Windows 10 / 11, 64-bit | `AhoosAI-Studio-2.5.0-windows-x64.zip` | 294 MB |
+| macOS, Apple silicon (M1 and later) | `AhoosAI-Studio-2.5.0-macos-arm64.dmg` | 295 MB |
+| macOS, Intel | `AhoosAI-Studio-2.5.0-macos-x64.dmg` | 299 MB |
+| Linux, x86-64 | `AhoosAI-Studio-2.5.0-linux-x64.tar.gz` | 356 MB |
 
 Unpack it and run **AhoosAI Studio**. With no model yet, it opens on the Models page: pick a Nimbus model and a size, or paste a Hugging Face link.
 

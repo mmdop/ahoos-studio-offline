@@ -58,28 +58,35 @@ DEFAULT_SETTINGS = {
     "active": {"base": "", "adapter": ""},
     "model": catalogue.DEFAULT_MODEL,          # 2.0's choice, read once to fill `active`
     "build": catalogue.DEFAULT_BUILD,
-    "context": 8192,
+    # 16K since 3.0: a project of a few files, written into one conversation,
+    # does not fit in 8K, and the cost is memory the KV cache takes, not speed.
+    "context": 16384,
     "threads": 0,
-    "gpu_layers": 0,
+    "gpu_layers": 0,            # 0 = as many as fit (the runtime decides); kept for 2.x settings files
+    "gpu": "auto",              # auto | off -- whether the graphics card is used at all
     # Apex's two dials. Level 5 and temperature 5 are what the model was trained
     # and measured at. Other models read the temperature as a plain dial (engine.DIAL).
     "level": 5,
     "temperature": 5,
     "memory": 6,                # turns of the conversation sent back with each message
-    # "ask" every time, or "session" to stop asking again for something already
-    # allowed once. There is deliberately no "never".
+    # "ask" every time (a plan is approved once for all its files), "session" to
+    # stop asking again for something already allowed once, or "auto": file
+    # changes in the project folder without asking -- every turn's changes can be
+    # undone in one click -- and commands asked once each. There is no "never".
     "permission": "ask",
     "folder": "",
+    "workspace": "",            # where new projects go when no folder is connected; "" = Documents
     "mode": "normal",           # normal | plan
     "web_on": False,            # the globe in the composer: search in this message
     "internet": WEB_DEFAULT,
-    "agent": {"files": True, "commands": True, "max_steps": 10, "command_timeout": 120},
+    "agent": {"files": True, "commands": True, "max_steps": 40, "command_timeout": 120},
     "hf_token": "",
     "chips_on": ["builtin-rtl-web"],
     "battle": {"mode": "parallel", "blind": False, "strength": 1.0},
     "language": "",             # "" follows the system
     "theme": "system",          # system | light | dark
     "motion": "full",           # full | reduced
+    "settings_version": 3,
 }
 
 BUILTIN_ARCH = {"nimbus-1.1-prime-ee": "qwen2", "nimbus-2-apex": "qwen3"}
@@ -104,6 +111,26 @@ def inside(root: Path, relative: str) -> Path:
     return target
 
 
+def migrate(settings: dict, stored: dict) -> dict:
+    """Settings saved by 2.x, brought to 3.0's defaults where they were 2.x's.
+
+    2.x wrote every setting to disk, defaults included, so a 3.0 default never
+    reaches someone upgrading: they would keep ten steps a turn -- a plan of
+    three files and a run spends most of that -- and an 8K context a project
+    does not fit in. A value still at 2.x's default is moved to 3.0's; a value
+    the person chose is theirs and stays.
+    """
+    if int(stored.get("settings_version") or 2) >= 3:
+        return settings
+    if settings.get("context") == 8192:
+        settings["context"] = 16384
+    agent = settings.get("agent") or {}
+    if agent.get("max_steps") == 10:
+        agent["max_steps"] = 40
+    settings["settings_version"] = 3
+    return settings
+
+
 def _merge(defaults: dict, stored: dict) -> dict:
     out = copy.deepcopy(defaults)
     for key, value in (stored or {}).items():
@@ -124,6 +151,7 @@ class Controller:
         self.settings = self._load_settings()
         self.state = "missing"            # missing | loading | ready | failed
         self.error = ""
+        self.error_kind = ""              # "blocked" when Windows refused to run the engine
         self.server: runtime.ModelServer | None = None
         self._lock = threading.RLock()
         self.self_url = ""
@@ -131,6 +159,9 @@ class Controller:
         self.runs: dict[str, threading.Event] = {}
         self.asks: dict[str, dict] = {}
         self.window = None                # pywebview's window, for native dialogs
+        from .procs import PROCS
+
+        self.procs = PROCS                # commands left running in the background
         self.library = Library()
         self.chats = Chats(data_dir() / "chats", legacy=data_dir() / "studio")
         self.battles = Battles(data_dir() / "battles.json")
@@ -146,7 +177,7 @@ class Controller:
             stored = json.loads(settings_file().read_text(encoding="utf-8"))
         except (OSError, ValueError):
             stored = {}
-        return _merge(DEFAULT_SETTINGS, stored)
+        return migrate(_merge(DEFAULT_SETTINGS, stored), stored)
 
     def save_settings(self) -> None:
         path = settings_file()
@@ -165,7 +196,7 @@ class Controller:
                 value = max(low, min(high, int(patch[key])))
                 restart |= key in ("context", "threads", "gpu_layers") and value != self.settings[key]
                 self.settings[key] = value
-        choices = {"permission": ("ask", "session"), "mode": ("normal", "plan"),
+        choices = {"permission": ("ask", "session", "auto"), "mode": ("normal", "plan"), "gpu": ("auto", "off"),
                    "language": ("", "fa", "en"), "theme": ("system", "light", "dark"),
                    "motion": ("full", "reduced")}
         for key, allowed in choices.items():
@@ -173,8 +204,12 @@ class Controller:
                 self.settings[key] = patch[key]
                 if key == "permission" and patch[key] == "ask":
                     self.allowed.clear()
+                if key == "gpu":
+                    restart = True
         if "web_on" in patch:
             self.settings["web_on"] = bool(patch["web_on"])
+        if isinstance(patch.get("workspace"), str):
+            self.settings["workspace"] = patch["workspace"].strip()
         if isinstance(patch.get("hf_token"), str):
             self.settings["hf_token"] = patch["hf_token"].strip()
         if isinstance(patch.get("chips_on"), list):
@@ -204,7 +239,7 @@ class Controller:
                 if key in patch["agent"]:
                     agent[key] = bool(patch["agent"][key])
             if "max_steps" in patch["agent"]:
-                agent["max_steps"] = max(1, min(30, int(patch["agent"]["max_steps"])))
+                agent["max_steps"] = max(4, min(120, int(patch["agent"]["max_steps"])))
             if "command_timeout" in patch["agent"]:
                 agent["command_timeout"] = max(10, min(3600, int(patch["agent"]["command_timeout"])))
         if isinstance(patch.get("battle"), dict):
@@ -347,31 +382,49 @@ class Controller:
             self.state = "missing"
             return
 
+        gpu = self.settings.get("gpu", "auto") != "off"
+
         def work() -> None:
-            with self._lock:
-                self.stop_model()
-                self.state, self.error = "loading", ""
+            # With the graphics card first; if the server dies loading that way --
+            # an old driver, a card the Vulkan build cannot use -- once more on
+            # the processor alone, rather than leaving the person with no model.
+            for use_gpu in ([True, False] if gpu else [False]):
+                with self._lock:
+                    self.stop_model()
+                    self.state, self.error, self.error_kind = "loading", "", ""
+                    try:
+                        server = runtime.ModelServer(runtime.Settings(
+                            model=Path(base["path"]),
+                            adapter=Path(adapter["path"]) if adapter else None,
+                            context=int(self.settings["context"]),
+                            threads=int(self.settings["threads"]),
+                            gpu_layers=int(self.settings["gpu_layers"]),
+                            gpu=use_gpu,
+                        ))
+                        server.start()
+                        self.server = server
+                    except runtime.RuntimeError_ as exc:
+                        self.state, self.error = "failed", str(exc)
+                        return
                 try:
-                    server = runtime.ModelServer(runtime.Settings(
-                        model=Path(base["path"]),
-                        adapter=Path(adapter["path"]) if adapter else None,
-                        context=int(self.settings["context"]),
-                        threads=int(self.settings["threads"]),
-                        gpu_layers=int(self.settings["gpu_layers"]),
-                    ))
-                    server.start()
-                    self.server = server
+                    server.wait_until_ready()
+                except runtime.Blocked as exc:
+                    if self.server is server:
+                        self.state, self.error, self.error_kind = "failed", str(exc), "blocked"
+                    return
                 except runtime.RuntimeError_ as exc:
+                    if self.server is not server:
+                        return
+                    if use_gpu:
+                        server.stop()
+                        continue
                     self.state, self.error = "failed", str(exc)
                     return
-            try:
-                server.wait_until_ready()
-            except runtime.RuntimeError_ as exc:
                 if self.server is server:
-                    self.state, self.error = "failed", str(exc)
+                    if gpu and not use_gpu:
+                        server.gpu_note = "CPU (the graphics card could not be used)"
+                    self.state = "ready"
                 return
-            if self.server is server:
-                self.state = "ready"
 
         threading.Thread(target=work, daemon=True, name="model-start").start()
 
@@ -546,6 +599,21 @@ class Controller:
         path = Path(raw)
         return path if path.is_dir() else None
 
+    def folder_for(self, chat: dict | None) -> Path | None:
+        """A conversation's own project folder, or the one connected in the window."""
+        raw = str((chat or {}).get("folder") or "")
+        if raw and Path(raw).is_dir():
+            return Path(raw)
+        return self.folder()
+
+    def workspace(self) -> Path:
+        """Where a new project gets its folder when none is connected."""
+        chosen = str(self.settings.get("workspace") or "").strip()
+        if chosen:
+            return Path(chosen).expanduser()
+        documents = Path.home() / "Documents"
+        return (documents if documents.is_dir() else Path.home()) / "AhoosAI Studio"
+
     def pick_folder(self) -> str:
         """Ask the person for a folder, through the window's own native dialog."""
         if self.window is None:
@@ -579,7 +647,7 @@ class Controller:
         return inside(root, relative)
 
     def needs_asking(self, key: str) -> bool:
-        if self.settings.get("permission") != "session":
+        if self.settings.get("permission") not in ("session", "auto"):
             return True
         return key not in self.allowed
 
@@ -596,7 +664,7 @@ class Controller:
         ask_id = uuid.uuid4().hex[:12]
         waiting = {"event": threading.Event(), "answer": "deny", "key": key}
         self.asks[ask_id] = waiting
-        emit("ask", {**payload, "ask_id": ask_id, "session": self.settings.get("permission") == "session"})
+        emit("ask", {**payload, "ask_id": ask_id, "session": self.settings.get("permission") in ("session", "auto")})
         deadline = time.monotonic() + 3600
         while not waiting["event"].wait(0.4):
             if cancel.is_set() or time.monotonic() > deadline:
@@ -703,6 +771,7 @@ class Controller:
             "engine": self.engine,
             "state": self.state if self.engine == "local" else "ready",
             "error": self.error,
+            "error_kind": self.error_kind,
             "profile": {"name": profile.name, "engine": profile.engine, "base": profile.base_name,
                         "adapter": profile.adapter_name, "has_adapter": profile.has_adapter},
             "active": {"base": base["key"] if base else "", "adapter": adapter["key"] if adapter else ""},
@@ -719,6 +788,9 @@ class Controller:
             "internet": internet,
             "hf_token": bool(self.settings.get("hf_token")),
             "folder": str(self.folder() or ""),
+            "workspace": str(self.workspace()),
+            "procs": self.procs.public(),
+            "gpu": self.server.gpu_note if self.server else "",
             "allowed": len(self.allowed),
             "window": self.window is not None,
         }
@@ -769,6 +841,7 @@ def run(*, engine: str = "local", browser: bool = False, port: int = 0) -> int:
     def shutdown() -> None:
         for cancel in list(controller.runs.values()):
             cancel.set()
+        controller.procs.stop_all()
         controller.stop_model()
         server.should_exit = True
 

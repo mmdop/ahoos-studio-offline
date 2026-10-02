@@ -55,10 +55,17 @@ def kill_tree(process: subprocess.Popen) -> None:
         process.kill()
 
 
-def shell_for(command: str) -> list[str]:
-    """The argv that runs a command line as the platform's own shell would."""
+def shell_for(command: str) -> list[str] | str:
+    """What runs a command line as the platform's own shell would.
+
+    On Windows a string, not a list. Given a list, Python quotes each item for
+    the C runtime's rules -- an inner `"` becomes `\\"` -- and cmd.exe does not
+    follow those rules: `python "my script.py"` arrived as `\\"my`, and every
+    command with a quoted path failed. `cmd /s /c "<line>"` takes the line
+    exactly as written, between the first quote and the last.
+    """
     if os.name == "nt":
-        return ["cmd.exe", "/d", "/s", "/c", command]
+        return f'cmd.exe /d /s /c "{command}"'
     return ["/bin/sh", "-lc", command]
 
 

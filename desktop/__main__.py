@@ -29,15 +29,18 @@ from . import catalogue, runtime
 from .download import DownloadError, fetch
 from .paths import bin_dir, models_dir
 
-# The CPU builds, one per platform. No CUDA or ROCm here on purpose: those are
-# hundreds of megabytes each and only pay off on hardware the app cannot assume.
-# Someone with a card can point the app at their own build; everyone else gets
-# something that runs everywhere.
+# Since 3.0 the Vulkan build on Windows and Linux, and the Metal one a Mac gets
+# by default. Vulkan reaches NVIDIA, AMD and Intel graphics alike for 30 MB --
+# CUDA's build is 250 MB and NVIDIA's alone -- and it carries every CPU backend
+# too: on a computer with no usable card it runs exactly as the CPU build did.
+# On a four-gigabyte GTX 1050 Ti, half of a 7B model fits and it writes about
+# 1.4 times as fast as that laptop's processor; a card with more memory takes
+# more of the model and gains more.
 LLAMA_BUILD = "b10991"
 RUNTIME_ASSETS = {
-    ("Windows", "AMD64"):  "llama-%s-bin-win-cpu-x64.zip",
+    ("Windows", "AMD64"):  "llama-%s-bin-win-vulkan-x64.zip",
     ("Windows", "ARM64"):  "llama-%s-bin-win-cpu-arm64.zip",
-    ("Linux", "x86_64"):   "llama-%s-bin-ubuntu-x64.tar.gz",
+    ("Linux", "x86_64"):   "llama-%s-bin-ubuntu-vulkan-x64.tar.gz",
     ("Linux", "aarch64"):  "llama-%s-bin-ubuntu-arm64.tar.gz",
     ("Darwin", "arm64"):   "llama-%s-bin-macos-arm64.tar.gz",
     ("Darwin", "x86_64"):  "llama-%s-bin-macos-x64.tar.gz",

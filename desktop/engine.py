@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import threading
 import time
 import urllib.error
@@ -85,6 +86,23 @@ class Llama:
             raise EngineError(f"the local model answered {error.code}: {detail}") from error
         except OSError as error:
             raise EngineError(f"the local model could not be reached: {error}") from error
+
+    def _get(self, path: str, timeout: float = 10.0) -> dict:
+        try:
+            with urllib.request.urlopen(self.root + path, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8", "replace"))
+        except (OSError, ValueError) as error:
+            raise EngineError(f"the local model could not be reached: {error}") from error
+
+    def context_size(self) -> int:
+        """How many tokens one conversation may hold, as the server was started."""
+        props = self._get("/props")
+        settings = props.get("default_generation_settings") or {}
+        return int(settings.get("n_ctx") or props.get("n_ctx") or 8192)
+
+    def count(self, text: str) -> int:
+        """Tokens in `text`, by the loaded model's own tokenizer."""
+        return len(self._post("/tokenize", {"content": text}, timeout=30).get("tokens") or [])
 
     def apply_template(self, messages: list[dict]) -> str:
         """The model's own chat template, ending where the assistant speaks next.
@@ -178,27 +196,43 @@ class Echo(Llama):
     streaming can be seen, and never pretends its words mean anything.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, delay: float = 0.03) -> None:
         super().__init__("http://echo.invalid", has_adapter=True)
+        self.delay = delay
 
     def apply_template(self, messages: list[dict]) -> str:
         return "".join(f"<|{m['role']}|>{m['content']}\n" for m in messages) + "<|assistant|>"
+
+    def context_size(self) -> int:
+        return 16384
+
+    def count(self, text: str) -> int:
+        return len(text) // 4
 
     def stream(self, prompt: str, *, n_predict: int, sampling: Sampling, stop=None, adapter=None,
                json_schema=None, cancel=None, ending=None, on_prompt=None) -> Iterator[str]:
         if on_prompt:
             on_prompt(0, len(prompt) // 4)
-            time.sleep(0.4)
+            time.sleep(self.delay * 4)
             on_prompt(len(prompt) // 4, len(prompt) // 4)
         last_user = prompt.rsplit("<|user|>", 1)[-1]
+        first_user = prompt.split("<|user|>", 1)[-1].split("\n<|", 1)[0] if "<|user|>" in prompt else ""
+        asks_to_make = any(word in (first_user + last_user).lower()
+                           for word in ("make", "create", "write", "build", "بساز", "بنویس"))
         if json_schema is not None:
             names = [option["properties"]["name"]["const"] for option in json_schema.get("oneOf", [])]
-            if "<tool_response>" not in last_user and "write_file" in names and any(
-                    word in last_user.lower() for word in ("make", "create", "write", "بساز", "بنویس")):
-                text = json.dumps({"name": "write_file", "arguments": {
-                    "path": "echo.txt", "content": "Written by the echo engine.\n"}})
+            if "plan" in names and asks_to_make and '"name": "plan"' not in prompt:
+                text = json.dumps({"name": "plan", "arguments": {
+                    "goal": "Write a file, as the echo engine does.", "folder": "", "steps": [
+                        {"do": "create", "path": "echo.txt", "title": "echo.txt",
+                         "detail": "One line of text."}]}})
+            elif "step_done" in names:
+                text = json.dumps({"name": "step_done", "arguments": {"note": "echo"}})
             else:
                 text = json.dumps({"name": "reply"})
+        elif re.search(r"`{3,4}[\w+#.-]*\n$", prompt):
+            # Inside an opened code fence: a file is being written.
+            text = "Written by the echo engine.\n"
         elif prompt.endswith("<think>\n"):
             text = "The echo engine does not think. It repeats, slowly, so the page can be tested."
         else:
@@ -210,7 +244,7 @@ class Echo(Llama):
         for index, word in enumerate(words):
             if cancel is not None and cancel.is_set():
                 raise Cancelled()
-            time.sleep(random.uniform(0.01, 0.05))
+            time.sleep(random.uniform(self.delay / 3, self.delay * 1.6))
             yield word + (" " if index < len(words) - 1 else "")
         if ending is not None:
             ending.update({"stop_type": "eos", "timings": {"predicted_n": len(words),

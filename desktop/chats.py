@@ -92,13 +92,25 @@ class Chats:
                 self._save(chat)
 
     def update(self, chat_id: str, **fields) -> dict:
+        """Title, pin, and since 3.0 the chat's own project folder."""
         with self._lock:
             chat = self.get(chat_id)
-            for key in ("title", "pinned"):
+            for key in ("title", "pinned", "folder"):
                 if key in fields:
                     chat[key] = fields[key]
             self._save(chat)
             return chat
+
+    def update_message(self, chat_id: str, message_id: str, **fields) -> dict:
+        """Mark one message -- a turn undone, say -- without touching the rest."""
+        with self._lock:
+            chat = self.get(chat_id)
+            for message in chat["messages"]:
+                if message.get("id") == message_id:
+                    message.update(fields)
+                    self._save(chat)
+                    return message
+        raise KeyError(f"no message {message_id!r}")
 
     def delete(self, chat_id: str) -> None:
         with self._lock:

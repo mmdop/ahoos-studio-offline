@@ -48,14 +48,24 @@ eight gigabytes of memory and Apex does not.
 
 ## What the app has
 
-- **A model that does the work.** Connect a folder and it lists, reads, writes
-  and edits files there and runs commands — then tells you what came of it,
-  instead of printing code for you to copy. It is told what it is running in,
-  which folder it may touch and whether the internet is on.
-- **A gate.** Reading is free. Before the model writes, deletes or runs anything
-  you see exactly what will happen — the diff, or the command as it will run —
-  and nothing happens until you allow it. There is no "never ask" setting, and no
-  list of forbidden commands: such a list looks like safety and is not.
+- **A model that finishes the job.** Ask for something to build, change or fix
+  and it plans first — a step for each file, then a step to run the result —
+  then writes every file in full, checks what it wrote (code that does not
+  compile, a page loading a file that is not there, a script looking for an
+  element the page lacks) and fixes what it finds. You watch the plan tick
+  itself off. A task too big for one turn keeps its plan: **Continue** picks it up.
+- **Projects of their own.** A new project gets its own folder — in
+  *Documents › AhoosAI Studio* when no folder is connected. Servers and watchers
+  keep running in the background with a Stop button, and **Open the page** shows
+  a web project in your browser.
+- **Undo, and a gate.** Every file an answer changes is copied first, and one
+  click puts the whole answer back. You approve a plan once, or choose
+  *Automatic* and let it change project files without asking; commands are
+  always asked about. There is no list of forbidden commands: such a list looks
+  like safety and is not.
+- **Your graphics card.** As much of the model as fits runs on it — NVIDIA, AMD
+  or Intel through Vulkan, Apple silicon through Metal — and the rest on the
+  processor. With no usable card it runs on the processor alone.
 - **The internet, if you want it** — off until you choose. Your computer's own
   connection (through its VPN or proxy, no key needed), an API key for Tavily,
   Brave, Exa, Serper or Jina, or any other search API you describe.
@@ -128,9 +138,12 @@ for the one-time model download — to Hugging Face, and every release lists the
 SHA-256 checksum of its files so you can confirm yours is the one published here.
 
 - **Windows, "Windows protected your PC":** click **More info**, then **Run anyway**.
-- **Windows 11 with Smart App Control on:** the app may be blocked outright, with
-  no option to continue. This is Windows refusing any unsigned program; it will
-  not run until the app is signed.
+- **Windows 11 with Smart App Control on:** Windows refuses unsigned programs it
+  does not know, including llama.cpp, which runs the model — so the app may open
+  and no model start. The app says when this is what happened. Smart App Control
+  can be turned off in *Windows Security › App & browser control*; that is your
+  decision, and on some versions of Windows it can only be turned back on by
+  reinstalling.
 - **macOS, "cannot be opened because the developer cannot be verified":**
   right-click the app, choose **Open**, then **Open** again. Or allow it under
   System Settings → Privacy & Security.
@@ -151,7 +164,7 @@ python desktop/packaging/build.py
 builds the package for the machine it runs on — PyInstaller freezes the
 interpreter it runs under and llama.cpp's binaries are per platform, so none of
 the three can be cross-built. `.github/workflows/desktop.yml` builds all four on
-their own runners; pushing a tag like `desktop-v2.0.0` attaches them to a draft
+their own runners; pushing a tag like `v3.0.0` attaches them to a draft
 release.
 
 To work on the app without packaging it:

@@ -177,6 +177,9 @@ def build(controller: "Controller") -> FastAPI:
         body = await _body(request)
         prompt = str(body.get("prompt", "")).strip()
         retry = bool(body.get("retry"))
+        resume_asked = bool(body.get("resume"))
+        if resume_asked and not prompt:
+            prompt = "Continue." if controller.settings.get("language") != "fa" else "ادامه بده."
         if not prompt and not retry:
             raise HTTPException(400, "Empty message.")
         if len(prompt) > MAX_PROMPT:
@@ -214,14 +217,23 @@ def build(controller: "Controller") -> FastAPI:
                     user = history.pop()
                 llama = controller.llama()
                 web = controller.web() if bool(body.get("web", controller.settings.get("web_on"))) else None
+                # A plan the last turn left unfinished, when "continue" was pressed.
+                resume = None
+                if resume_asked:
+                    last = next((m for m in reversed(history) if m.get("role") == "assistant"), None)
+                    if last and isinstance(last.get("plan"), dict):
+                        resume = last["plan"]
+                folder = controller.folder_for(chat)
                 runner = Turn(
                     llama=llama, profile=controller.profile(), settings=controller.settings,
-                    folder=controller.folder(), inside=controller.inside, web=web, history=history,
+                    folder=folder, inside=None, web=web, history=history,
                     request=user["content"] if user else prompt, plan=bool(user.get("plan")) if user else plan,
                     emit=emit, cancel=cancel_flag,
                     ask=lambda key, payload: controller.ask(emit, cancel_flag, key, payload),
                     needs_asking=controller.needs_asking, chips=controller.chips_text(),
-                    first=not history)
+                    first=not history, workspace=controller.workspace(),
+                    on_folder=lambda path: controller.chats.update(chat["id"], folder=str(path)),
+                    resume=resume, procs=controller.procs)
                 if user is None:
                     sent = runner.sent_text(attachments)
                     user = controller.chats.append(chat["id"], {
@@ -231,15 +243,96 @@ def build(controller: "Controller") -> FastAPI:
                     sent = user.get("sent") or user["content"]
                 emit("run", {"run_id": run_id, "chat_id": chat["id"], "user": user,
                              "title": controller.chats.get(chat["id"]).get("title", ""),
-                             "profile": runner.profile.name,
+                             "profile": runner.profile.name, "folder": str(folder or ""),
                              "tools": [t.name for t in runner.tools]})
                 message = runner.run(sent)
                 saved = controller.chats.append(chat["id"], message)
                 emit("done", {"message": saved})
             finally:
                 controller.runs.pop(run_id, None)
+                try:
+                    from .checkpoints import prune
+
+                    prune()
+                except OSError:
+                    pass
 
         return stream(work, cancel)
+
+    @app.post("/local/undo")
+    async def undo(request: Request) -> dict:
+        """Put back every file one turn changed, and mark the turn as undone."""
+        from . import checkpoints
+
+        body = await _body(request)
+        chat_id, message_id = str(body.get("chat_id", "")), str(body.get("message_id", ""))
+        try:
+            chat = controller.chats.get(chat_id)
+            message = next(m for m in chat["messages"] if m.get("id") == message_id)
+            if not message.get("checkpoint"):
+                raise KeyError("that answer changed no files")
+            restored = await run_in_threadpool(checkpoints.undo, message["checkpoint"])
+            controller.chats.update_message(chat_id, message_id, undone=True)
+        except (KeyError, StopIteration) as error:
+            raise bad(error if isinstance(error, KeyError) else KeyError("no such answer"), 404) from error
+        return {"restored": restored}
+
+    @app.get("/local/procs")
+    def procs() -> list:
+        return controller.procs.public()
+
+    @app.post("/local/procs/{proc_id}/stop")
+    def stop_proc(proc_id: str) -> dict:
+        return {"ok": controller.procs.stop(proc_id), "procs": controller.procs.public()}
+
+    @app.post("/local/open-project")
+    async def open_project(request: Request) -> dict:
+        """A project folder in the system's file manager -- a folder only, never a file to run."""
+        import os
+        import subprocess
+        import sys
+
+        body = await _body(request)
+        folder = Path(str(body.get("folder", ""))).expanduser()
+        if not str(body.get("folder", "")).strip() or not folder.is_dir():
+            raise HTTPException(404, "no such folder")
+        if os.name == "nt":
+            os.startfile(folder)  # noqa: S606 - a directory, checked above
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(folder)])
+        else:
+            subprocess.Popen(["xdg-open", str(folder)])
+        return {"ok": True}
+
+    @app.post("/local/open-file")
+    async def open_file(request: Request) -> dict:
+        """A page or picture from a chat's project folder, in the person's browser."""
+        from . import tools as T
+
+        body = await _body(request)
+        chat = None
+        if body.get("chat_id"):
+            try:
+                chat = controller.chats.get(str(body["chat_id"]))
+            except KeyError:
+                chat = None
+        root = Path(str(body["folder"])) if body.get("folder") else controller.folder_for(chat)
+        if root is None or not root.is_dir():
+            raise HTTPException(400, "there is no project folder for that")
+        from .app import inside
+
+        try:
+            target = inside(root, str(body.get("path", "")))
+        except RuntimeError as error:
+            raise bad(error) from error
+        if not target.is_file():
+            raise HTTPException(404, "no such file")
+        if target.suffix.lower() not in T.OPENABLE:
+            raise HTTPException(400, "only pages, pictures and documents open this way")
+        import webbrowser
+
+        webbrowser.open(target.resolve().as_uri())
+        return {"ok": True, "path": str(target)}
 
     @app.post("/local/stop")
     async def stop(request: Request) -> dict:
@@ -416,6 +509,12 @@ def build(controller: "Controller") -> FastAPI:
             controller.set_folder(str(body.get("folder", "")))
         except RuntimeError as error:
             raise bad(error) from error
+        # The folder chosen in a conversation is that conversation's project from then on.
+        if body.get("chat_id"):
+            try:
+                controller.chats.update(str(body["chat_id"]), folder=str(controller.folder() or ""))
+            except KeyError:
+                pass
         return {"folder": str(controller.folder() or "")}
 
     @app.get("/local/folder/list")

@@ -43,9 +43,37 @@ class RuntimeError_(RuntimeError):
     """The model server could not be started, or died."""
 
 
+class Blocked(RuntimeError_):
+    """Windows refused to run the engine: Smart App Control, or a code-integrity policy.
+
+    llama.cpp publishes its Windows builds unsigned, and a Windows 11 with Smart
+    App Control on refuses to load an unsigned file it has no reputation for.
+    The process does not start at all; it exits with STATUS_SYSTEM_INTEGRITY_
+    POLICY_VIOLATION (0xC0E90002) before printing a line. Said as what it is,
+    because "the model server stopped while loading" with an empty log tells the
+    person nothing they can act on.
+    """
+
+
+BLOCKED_CODE = 0xC0E90002
+
+
+def blocked(code: int | None) -> bool:
+    return code is not None and (int(code) & 0xFFFFFFFF) == BLOCKED_CODE
+
+
 BINARY = "llama-server.exe" if os.name == "nt" else "llama-server"
 LOAD_TIMEOUT = 600           # a 5 GB model off a cold spinning disk, with room to spare
 POLL = 0.4
+
+# The Vulkan build puts a model's layers on the card in blocks of up to 1 GB.
+# Some drivers lose the device on a block that size -- a GTX 1050 Ti on a 2022
+# driver does, at about 950 MB, which is any model past nine layers -- and the
+# card is then not used at all. In blocks of 512 MB the same card takes eighteen
+# layers and writes twice as fast as the processor alone; on a card that never
+# had the problem, smaller blocks cost nothing. A tensor bigger than a block
+# still gets a buffer of its own.
+VULKAN_ENV = {"GGML_VK_SUBALLOCATION_BLOCK_SIZE": str(512 * 1024 * 1024)}
 
 
 def find_binary(bundled: Path | None = None) -> Path:
@@ -100,7 +128,8 @@ class Settings:
     adapter: Path | None = None
     context: int = 8192
     threads: int = 0             # 0 lets llama.cpp choose
-    gpu_layers: int = 0          # CPU by default; the shipped binary has no CUDA
+    gpu_layers: int = 0          # 0: as many layers as fit on the graphics card (llama.cpp's --fit decides)
+    gpu: bool = True             # False keeps everything on the processor (--device none)
     port: int = 0
     # Two slots sharing one context: a conversation uses the whole of it, and a
     # battle's two answers are generated side by side in the two slots.
@@ -117,6 +146,7 @@ class ModelServer:
         self.process: subprocess.Popen | None = None
         self.log: deque[str] = deque(maxlen=400)
         self._reader: threading.Thread | None = None
+        self.gpu_note = ""
 
     @property
     def base_url(self) -> str:
@@ -132,6 +162,9 @@ class ModelServer:
             # Nothing outside this machine may reach it. The API is unauthenticated
             # because it is not reachable, and those two facts have to stay joined.
             "--no-webui",
+            # Level 4 is where llama.cpp says how many layers went on the card
+            # (offload_note); at its default of 3 it says nothing about it.
+            "--log-verbosity", "4",
         ]
         if self.settings.parallel > 1:
             argv += ["--parallel", str(self.settings.parallel), "--kv-unified"]
@@ -141,7 +174,13 @@ class ModelServer:
             argv += ["--lora", str(self.settings.adapter)]
         if self.settings.threads:
             argv += ["--threads", str(self.settings.threads)]
-        if self.settings.gpu_layers:
+        # Since 3.0 the runtime is llama.cpp's Vulkan build on Windows and Linux
+        # (Metal on a Mac): with nothing said, it puts as many layers on the
+        # graphics card as fit and leaves the rest to the processor, and on a
+        # computer with no usable card it simply runs on the processor.
+        if not self.settings.gpu:
+            argv += ["--device", "none"]
+        elif self.settings.gpu_layers:
             argv += ["--n-gpu-layers", str(self.settings.gpu_layers)]
         return argv
 
@@ -158,6 +197,9 @@ class ModelServer:
             # Without this a console window opens in front of the app every time.
             creation = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+        env = dict(os.environ)
+        for name, value in VULKAN_ENV.items():
+            env.setdefault(name, value)     # a value the person set themselves wins
         self.process = subprocess.Popen(
             self.command(),
             stdout=subprocess.PIPE,
@@ -167,6 +209,7 @@ class ModelServer:
             encoding="utf-8",
             errors="replace",
             creationflags=creation,
+            env=env,
         )
 
         def pump() -> None:
@@ -186,12 +229,17 @@ class ModelServer:
         url = f"http://127.0.0.1:{self.port}/health"
         while time.monotonic() < deadline:
             if self.process and self.process.poll() is not None:
+                code = self.process.poll()
+                if blocked(code):
+                    raise Blocked("Windows blocked the model engine (Smart App Control). llama.cpp's files are "
+                                  "not signed, and this Windows refuses to run unsigned files it does not know.")
                 raise RuntimeError_(
-                    "the model server stopped while loading.\n" + self.tail(12)
+                    f"the model server stopped while loading (exit code {code}).\n" + self.tail(12)
                 )
             try:
                 with urllib.request.urlopen(url, timeout=3) as response:
                     if response.status == 200:
+                        self.gpu_note = offload_note(list(self.log))
                         return
             except urllib.error.HTTPError as exc:
                 if exc.code == 503:            # loading: the answer we are waiting for
@@ -225,6 +273,25 @@ class ModelServer:
                 self.process.kill()
                 self.process.wait(timeout=grace)
         self.process = None
+
+
+def offload_note(lines: list[str]) -> str:
+    """What llama.cpp said it put on the graphics card, in a few words."""
+    import re
+
+    device = ""
+    layers = ""
+    for line in lines:
+        found = re.search(r"ggml_vulkan: \d+ = ([^|(]+)", line) or re.search(r"using device \w+ \(([^)]+)\)", line) \
+            or re.search(r"Metal.*?(Apple M\w*[^,]*)", line)
+        if found and not device:
+            device = found.group(1).strip()
+        counted = re.search(r"offloaded (\d+)/(\d+) layers to GPU", line)
+        if counted:
+            layers = f"{counted.group(1)}/{counted.group(2)}"
+    if layers and not layers.startswith("0/"):
+        return f"{device or 'GPU'} · {layers} layers"
+    return "CPU"
 
 
 def probe(base_url: str, timeout: float = 5.0) -> dict:

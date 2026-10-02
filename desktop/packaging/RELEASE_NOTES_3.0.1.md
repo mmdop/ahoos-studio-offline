@@ -47,7 +47,7 @@
 | System | File | Size |
 |---|---|---|
 | Windows 10 / 11, 64-bit | `AhoosAI-Studio-3.0.1-windows-x64.zip` | 307 MB |
-| macOS, Apple silicon (M1 and later) | `AhoosAI-Studio-3.0.1-macos-arm64.dmg` | 295 MB |
+| macOS, Apple silicon (M1 and later) | `AhoosAI-Studio-3.0.1-macos-arm64.dmg` | 296 MB |
 | macOS, Intel | `AhoosAI-Studio-3.0.1-macos-x64.dmg` | 299 MB |
 | Linux, x86-64 | `AhoosAI-Studio-3.0.1-linux-x64.tar.gz` | 370 MB |
 
@@ -115,7 +115,7 @@ Run the new package in place of the old one. Your models, settings and conversat
 | سیستم | فایل | حجم |
 |---|---|---|
 | ویندوز ۱۰ / ۱۱، ۶۴ بیتی | `AhoosAI-Studio-3.0.1-windows-x64.zip` | ۳۰۷ مگابایت |
-| مک، اپل سیلیکون (M1 به بعد) | `AhoosAI-Studio-3.0.1-macos-arm64.dmg` | ۲۹۵ مگابایت |
+| مک، اپل سیلیکون (M1 به بعد) | `AhoosAI-Studio-3.0.1-macos-arm64.dmg` | ۲۹۶ مگابایت |
 | مک، اینتل | `AhoosAI-Studio-3.0.1-macos-x64.dmg` | ۲۹۹ مگابایت |
 | لینوکس، x86-64 | `AhoosAI-Studio-3.0.1-linux-x64.tar.gz` | ۳۷۰ مگابایت |
 

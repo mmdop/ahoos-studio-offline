@@ -43,12 +43,12 @@
 
 ## Download
 
-| System | File |
-|---|---|
-| Windows 10 / 11, 64-bit | `AhoosAI-Studio-3.0.0-windows-x64.zip` |
-| macOS, Apple silicon (M1 and later) | `AhoosAI-Studio-3.0.0-macos-arm64.dmg` |
-| macOS, Intel | `AhoosAI-Studio-3.0.0-macos-x64.dmg` |
-| Linux, x86-64 | `AhoosAI-Studio-3.0.0-linux-x64.tar.gz` |
+| System | File | Size |
+|---|---|---|
+| Windows 10 / 11, 64-bit | `AhoosAI-Studio-3.0.0-windows-x64.zip` | 307 MB |
+| macOS, Apple silicon (M1 and later) | `AhoosAI-Studio-3.0.0-macos-arm64.dmg` | 295 MB |
+| macOS, Intel | `AhoosAI-Studio-3.0.0-macos-x64.dmg` | 299 MB |
+| Linux, x86-64 | `AhoosAI-Studio-3.0.0-linux-x64.tar.gz` | 370 MB |
 
 Unpack it and run **AhoosAI Studio**. With no model yet, it opens on the Models page.
 
@@ -110,12 +110,12 @@ Run the new package in place of the old one. Your models, settings and conversat
 
 ## دانلود
 
-| سیستم | فایل |
-|---|---|
-| ویندوز ۱۰ / ۱۱، ۶۴ بیتی | `AhoosAI-Studio-3.0.0-windows-x64.zip` |
-| مک، اپل سیلیکون (M1 به بعد) | `AhoosAI-Studio-3.0.0-macos-arm64.dmg` |
-| مک، اینتل | `AhoosAI-Studio-3.0.0-macos-x64.dmg` |
-| لینوکس، x86-64 | `AhoosAI-Studio-3.0.0-linux-x64.tar.gz` |
+| سیستم | فایل | حجم |
+|---|---|---|
+| ویندوز ۱۰ / ۱۱، ۶۴ بیتی | `AhoosAI-Studio-3.0.0-windows-x64.zip` | ۳۰۷ مگابایت |
+| مک، اپل سیلیکون (M1 به بعد) | `AhoosAI-Studio-3.0.0-macos-arm64.dmg` | ۲۹۵ مگابایت |
+| مک، اینتل | `AhoosAI-Studio-3.0.0-macos-x64.dmg` | ۲۹۹ مگابایت |
+| لینوکس، x86-64 | `AhoosAI-Studio-3.0.0-linux-x64.tar.gz` | ۳۷۰ مگابایت |
 
 فایل را باز کنید و **AhoosAI Studio** را اجرا کنید. اگر هنوز مدلی نصب نشده باشد، برنامه با صفحه‌ی مدل‌ها باز می‌شود.
 

@@ -25,6 +25,7 @@
 **It knows today.** The model is told the date — in both calendars — and a question about now (news, prices, today) begins with a web search when the internet is on.
 
 **Also:**
+- On a Mac, PML-sRUN puts the model on Apple's own GPU (Metal), which shares the computer's memory and is still the fast way.
 - The chat follows a long answer as it grows; scroll up to read and it stays where you are, scroll back to the end and it follows again.
 - Installers: a Windows installer (for your user, no administrator needed) and a `.deb` for Debian and Ubuntu, beside the `.zip`, `.tar.gz` and macOS `.dmg`.
 
@@ -32,11 +33,11 @@
 
 | | |
 |---|---|
-| Windows (installer) | `AhoosAI-Studio-3.1.0-windows-x64-setup.exe` |
-| Windows (portable) | `AhoosAI-Studio-3.1.0-windows-x64.zip` |
-| macOS, Apple silicon | `AhoosAI-Studio-3.1.0-macos-arm64.dmg` |
-| macOS, Intel | `AhoosAI-Studio-3.1.0-macos-x64.dmg` |
-| Linux, Debian/Ubuntu | `AhoosAI-Studio-3.1.0-linux-x64.deb` |
-| Linux, other | `AhoosAI-Studio-3.1.0-linux-x64.tar.gz` |
+| Windows (installer) | `AhoosAI-Studio-3.1.1-windows-x64-setup.exe` |
+| Windows (portable) | `AhoosAI-Studio-3.1.1-windows-x64.zip` |
+| macOS, Apple silicon | `AhoosAI-Studio-3.1.1-macos-arm64.dmg` |
+| macOS, Intel | `AhoosAI-Studio-3.1.1-macos-x64.dmg` |
+| Linux, Debian/Ubuntu | `AhoosAI-Studio-3.1.1-linux-x64.deb` |
+| Linux, other | `AhoosAI-Studio-3.1.1-linux-x64.tar.gz` |
 
 Check your download against `SHA256SUMS.txt`.

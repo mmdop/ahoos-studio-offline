@@ -1,7 +1,7 @@
 """PML-sRUN: run a model bigger than the machine -- in pieces, each where it fits.
 
 PML-sRUN was designed and built by AhoosAI (https://ahoos-ai.site).
-Copyright (c) 2026 AhoosAI. All rights reserved. The public release follows in November 2026.
+Copyright (c) 2026 AhoosAI. MIT License (LICENSE): use it freely, and keep this notice.
 
 The model is cut into pieces the way llama.cpp can place them: each layer's attention and router,
 its feed-forward (dense) or its experts (MoE), the embeddings and the output. Each piece goes to the
@@ -13,14 +13,16 @@ For a dense model every piece is needed for every token, so a small model of the
 proposes several tokens and the big one checks them in one pass (speculative decoding): the pieces
 are read once for several tokens.
 
-    python projects/pml-srun/srun.py plan  MODEL.gguf [--ctx 4096] [--draft SMALL.gguf]
+    python srun.py setup [--kind auto|vulkan|cuda|cpu]   llama.cpp for this machine, into engine/
+    python srun.py plan  MODEL.gguf [--ctx 4096] [--draft SMALL.gguf]
     python projects/pml-srun/srun.py bench MODEL.gguf [--ctx 4096] [--draft SMALL.gguf] [--tokens 128]
     python projects/pml-srun/srun.py serve MODEL.gguf [--port 8080]
 
 `plan` reads the model and the machine and says where each piece would go and why; `bench` starts
 llama.cpp's server with the plan and its neighbours, measures each, and keeps the fastest beside the
-model (MODEL.gguf.srun.json); `serve` starts the kept one. The engine is the studio's own llama.cpp
-(llama-server, %LOCALAPPDATA%/AhoosAI Studio/bin), or LLAMA_SERVER.
+model (MODEL.gguf.srun.json); `serve` starts the kept one. The engine is llama.cpp's server: the one
+`setup` put in engine/ beside this file, the AhoosAI studio's own (%LOCALAPPDATA%/AhoosAI Studio/bin),
+or the one LLAMA_SERVER names. `python panel.py` opens the same in a browser (panl.html).
 """
 
 from __future__ import annotations
@@ -44,7 +46,7 @@ MIB = 2 ** 20
 NAME = "PML-sRUN"
 MAKER = "AhoosAI"
 HOME = "https://ahoos-ai.site"
-VERSION = "0.2"
+VERSION = "0.3"
 BANNER = f"{NAME} {VERSION} -- by {MAKER} ({HOME})"
 
 
@@ -180,9 +182,13 @@ class Machine:
 
     @property
     def card(self) -> Device | None:
-        """The graphics card the pieces go to: the discrete one with the most free memory."""
+        """The graphics card the pieces go to: the discrete one with the most free memory -- or, on a Mac,
+        Apple's own GPU (Metal), which shares the computer's memory and is still the fast way."""
         discrete = [d for d in self.devices if not d.integrated]
-        return max(discrete, key=lambda d: d.free) if discrete else None
+        if discrete:
+            return max(discrete, key=lambda d: d.free)
+        apple = [d for d in self.devices if re.search(r"(?i)apple|metal|mtl", d.name + " " + d.label)]
+        return max(apple, key=lambda d: d.free) if apple else None
 
 
 def memory() -> tuple[int, int]:
@@ -206,14 +212,99 @@ def memory() -> tuple[int, int]:
     return info["MemTotal"], info.get("MemAvailable", info["MemFree"])
 
 
+HERE = Path(__file__).resolve().parent
+EXE = "llama-server.exe" if os.name == "nt" else "llama-server"
+
+
 def server_binary() -> Path:
+    """llama.cpp's server: LLAMA_SERVER, else the one `setup` put in engine/, else the AhoosAI studio's."""
     if os.environ.get("LLAMA_SERVER"):
         return Path(os.environ["LLAMA_SERVER"])
+    found = sorted((HERE / "engine").rglob(EXE)) if (HERE / "engine").is_dir() else []
+    if found:
+        return found[0]
     base = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local" / "share")) / "AhoosAI Studio" / "bin"
-    exe = base / ("llama-server.exe" if os.name == "nt" else "llama-server")
-    if not exe.is_file():
-        raise SystemExit(f"llama-server is not at {exe}: install the studio, or set LLAMA_SERVER")
-    return exe
+    if (base / EXE).is_file():
+        return base / EXE
+    raise SystemExit("llama-server was not found: run `python srun.py setup`, install the AhoosAI studio, "
+                     "or set LLAMA_SERVER to its path")
+
+
+# -- setup: llama.cpp for this machine -------------------------------------------------------------------
+
+LLAMA_TAG = "b10991"                                # the build PML-sRUN was measured with
+RELEASES = f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_TAG}"
+
+
+def engine_assets(kind: str = "auto") -> list[str]:
+    """The release files for this system: Vulkan by default on Windows and Linux (any graphics card),
+    Metal on macOS (built in), CUDA for an NVIDIA card when asked for, the processor alone when asked."""
+    system, machine_ = platform.system(), platform.machine().lower()
+    arm = machine_ in ("arm64", "aarch64")
+    if system == "Darwin":
+        return [f"llama-{LLAMA_TAG}-bin-macos-{'arm64' if arm else 'x64'}.tar.gz"]
+    if kind == "auto":
+        kind = "vulkan"
+    if system == "Windows":
+        if kind == "cuda":
+            return [f"llama-{LLAMA_TAG}-bin-win-cuda-12.4-x64.zip", f"cudart-llama-bin-win-cuda-12.4-x64.zip"]
+        return [f"llama-{LLAMA_TAG}-bin-win-{'cpu' if kind == 'cpu' else 'vulkan'}-{'arm64' if arm and kind == 'cpu' else 'x64'}.zip"]
+    if kind == "cuda":
+        return [f"llama-{LLAMA_TAG}-bin-ubuntu-cuda-12.8-x64.tar.gz", f"cudart-llama-{LLAMA_TAG}-bin-ubuntu-cuda-12.8-x64.tar.gz"]
+    if kind == "cpu":
+        return [f"llama-{LLAMA_TAG}-bin-ubuntu-{'arm64' if arm else 'x64'}.tar.gz"]
+    return [f"llama-{LLAMA_TAG}-bin-ubuntu-vulkan-{'arm64' if arm else 'x64'}.tar.gz"]
+
+
+def setup(kind: str = "auto", say=print) -> Path:
+    """Download llama.cpp's release for this machine into engine/ and unpack it; the server's path."""
+    import shutil
+    import tarfile
+    import zipfile
+
+    target = HERE / "engine"
+    target.mkdir(exist_ok=True)
+    for name in engine_assets(kind):
+        archive = target / name
+        if not archive.exists():
+            say(f"downloading {name}")
+            request = urllib.request.Request(f"{RELEASES}/{name}", headers={"User-Agent": "PML-sRUN"})
+            with urllib.request.urlopen(request, timeout=120) as response, open(archive.with_suffix(".part"), "wb") as out:
+                total, done, last = int(response.headers.get("Content-Length") or 0), 0, 0.0
+                while chunk := response.read(1 << 20):
+                    out.write(chunk)
+                    done += len(chunk)
+                    if total and time.time() - last > 1:
+                        last = time.time()
+                        say(f"  {done / MIB:.0f} of {total / MIB:.0f} MB")
+            archive.with_suffix(".part").replace(archive)
+        say(f"unpacking {name}")
+        root = target.resolve()
+        if name.endswith(".zip"):
+            with zipfile.ZipFile(archive) as bundle:
+                for member in bundle.namelist():
+                    if not (root / member).resolve().is_relative_to(root):
+                        raise SystemExit(f"{name}: {member} would land outside engine/")
+                bundle.extractall(root)
+        else:
+            with tarfile.open(archive) as bundle:
+                for member in bundle.getmembers():
+                    if not (root / member.name).resolve().is_relative_to(root) or member.islnk():
+                        raise SystemExit(f"{name}: {member.name} would land outside engine/")
+                try:
+                    bundle.extractall(root, filter="data")  # no paths outside, no links out
+                except TypeError:                           # a Python without extraction filters
+                    bundle.extractall(root)
+        archive.unlink()
+    found = sorted(target.rglob(EXE))
+    if not found:
+        raise SystemExit("the download has no llama-server in it")
+    if os.name != "nt":
+        for f in found[0].parent.iterdir():
+            if f.is_file() and not f.suffix:
+                f.chmod(f.stat().st_mode | 0o111)
+    say(f"llama-server: {found[0]}")
+    return found[0]
 
 
 INTEGRATED = re.compile(r"(?i)intel.*(hd|uhd|iris)|radeon\(tm\) graphics|vega \d+ graphics|apple")
@@ -496,10 +587,54 @@ def candidates(model: Model, box: Machine, ctx: int, draft: Path | None) -> list
 
 # -- the commands ----------------------------------------------------------------------------------------
 
+def profile_path(model_path: Path) -> Path:
+    """Where bench keeps the fastest arrangement for a model: beside it."""
+    return model_path.with_name(model_path.name + ".srun.json")
+
+
+def kept_or_planned(model_path: Path, ctx: int, draft: Path | None = None, card_mib: int | None = None) -> list[str]:
+    """The arguments serve uses: bench's fastest when there is one, else the plan."""
+    kept = profile_path(model_path)
+    if kept.exists():
+        return json.loads(kept.read_text())["argv"]
+    return plan(read_gguf(model_path), machine(model_path, card_mib), ctx, draft).argv
+
+
+def bench(model_path: Path, ctx: int, draft: Path | None = None, tokens: int = 128, only: str | None = None,
+          card_mib: int | None = None, say=print, stop=None) -> dict:
+    """Each candidate started and timed; the fastest kept beside the model. `stop()` true ends early."""
+    model = read_gguf(model_path)
+    box = machine(model_path, card_mib)
+    results = []
+    for p in candidates(model, box, ctx, draft):
+        if only and only not in p.name:
+            continue
+        if stop and stop():
+            break
+        say(f"-- {p.name}: {' '.join(p.argv)}")
+        r = measure(model_path, p, tokens=tokens)
+        say(f"   {r.get('tok_s', '-') if r.get('ok') else 'failed: ' + r.get('why', '')} "
+            + ("tokens a second" if r.get("ok") else ""))
+        results.append((p, r))
+    good = [(p, r) for p, r in results if r.get("ok")]
+    if not good:
+        raise SystemExit("no arrangement ran: see the .srun.log beside the model")
+    best, r = max(good, key=lambda pr: pr[1]["tok_s"])
+    kept = {"argv": best.argv, "name": best.name, "measured": r,
+            "all": [{"name": p.name, **{k: v for k, v in r.items() if k != "runs"}} for p, r in results],
+            "machine": {"ram_gb": round(box.ram_total / GIB, 1), "card": box.card.label if box.card else None},
+            "made": time.strftime("%Y-%m-%d %H:%M:%S"), "by": BANNER}
+    profile_path(model_path).write_text(json.dumps(kept, indent=1))
+    say(f"fastest: {best.name}, {r['tok_s']} tokens a second -- kept in {profile_path(model_path).name}")
+    return kept
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], epilog=f"{NAME} is made by {MAKER}: {HOME}")
-    ap.add_argument("command", choices=["plan", "bench", "serve"])
-    ap.add_argument("model", type=Path)
+    ap.add_argument("command", choices=["setup", "plan", "bench", "serve"])
+    ap.add_argument("model", type=Path, nargs="?")
+    ap.add_argument("--kind", default="auto", choices=["auto", "vulkan", "cuda", "cpu"],
+                    help="setup: which llama.cpp build (auto: Vulkan, or Metal on macOS)")
     ap.add_argument("--ctx", type=int, default=4096)
     ap.add_argument("--draft", type=Path)
     ap.add_argument("--tokens", type=int, default=128)
@@ -508,11 +643,14 @@ def main() -> None:
     ap.add_argument("--card-mib", type=int, help="plan for a card with this much free memory (MiB) at most")
     a = ap.parse_args()
     print(BANNER, flush=True)
+    if a.command == "setup":
+        setup(a.kind)
+        return
+    if a.model is None:
+        ap.error("a model (.gguf) is needed")
     model = read_gguf(a.model)
-    profile = a.model.with_name(a.model.name + ".srun.json")
     if a.command == "serve":
-        kept = json.loads(profile.read_text()) if profile.exists() else None
-        argv = kept["argv"] if kept else plan(model, machine(card_mib=a.card_mib), a.ctx, a.draft).argv
+        argv = kept_or_planned(a.model, a.ctx, a.draft, a.card_mib)
         cmd = [str(server_binary()), "--model", str(a.model), "--host", "127.0.0.1", "--port", str(a.port)] + argv
         print(" ".join(cmd), flush=True)
         sys.exit(subprocess.call(cmd, env=engine_env()))
@@ -527,23 +665,7 @@ def main() -> None:
         print(p.describe())
         print("llama-server " + " ".join(p.argv))
         return
-    results = []
-    for p in candidates(model, box, a.ctx, a.draft):
-        if a.only and a.only not in p.name:
-            continue
-        print(f"-- {p.name}: {' '.join(p.argv)}", flush=True)
-        r = measure(a.model, p, tokens=a.tokens)
-        print(f"   {r}", flush=True)
-        results.append((p, r))
-    good = [(p, r) for p, r in results if r.get("ok")]
-    if not good:
-        raise SystemExit("no arrangement ran: see the .srun.log beside the model")
-    best, r = max(good, key=lambda pr: pr[1]["tok_s"])
-    profile.write_text(json.dumps({"argv": best.argv, "name": best.name, "measured": r,
-                                   "all": [{"name": p.name, **{k: v for k, v in r.items() if k != "runs"}} for p, r in results],
-                                   "machine": {"ram_gb": round(box.ram_total / GIB, 1), "card": box.card.label if box.card else None},
-                                   "made": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=1))
-    print(f"fastest: {best.name}, {r['tok_s']} tokens a second -- kept in {profile.name}")
+    bench(a.model, a.ctx, a.draft, a.tokens, a.only, a.card_mib, say=lambda line: print(line, flush=True))
 
 
 if __name__ == "__main__":

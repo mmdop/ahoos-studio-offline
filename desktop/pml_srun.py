@@ -1,6 +1,6 @@
 """PML-sRUN: run a model bigger than the machine -- in pieces, each where it fits.
 
-PML-sRUN was designed and built by AhoosAI (https://ahoos-ai.site).
+PML-sRUN made by AhoosAI (https://ahoos-ai.site).
 Copyright (c) 2026 AhoosAI. MIT License (LICENSE): use it freely, and keep this notice.
 
 The model is cut into pieces the way llama.cpp can place them: each layer's attention and router,
@@ -15,8 +15,8 @@ are read once for several tokens.
 
     python srun.py setup [--kind auto|vulkan|cuda|cpu]   llama.cpp for this machine, into engine/
     python srun.py plan  MODEL.gguf [--ctx 4096] [--draft SMALL.gguf]
-    python projects/pml-srun/srun.py bench MODEL.gguf [--ctx 4096] [--draft SMALL.gguf] [--tokens 128]
-    python projects/pml-srun/srun.py serve MODEL.gguf [--port 8080]
+    python srun.py bench MODEL.gguf [--ctx 4096] [--draft SMALL.gguf] [--tokens 128]
+    python srun.py serve MODEL.gguf [--port 8080]
 
 `plan` reads the model and the machine and says where each piece would go and why; `bench` starts
 llama.cpp's server with the plan and its neighbours, measures each, and keeps the fastest beside the
@@ -46,8 +46,8 @@ MIB = 2 ** 20
 NAME = "PML-sRUN"
 MAKER = "AhoosAI"
 HOME = "https://ahoos-ai.site"
-VERSION = "0.3"
-BANNER = f"{NAME} {VERSION} -- by {MAKER} ({HOME})"
+VERSION = "0.3.1"
+BANNER = f"{NAME} {VERSION} made by {MAKER} ({HOME})"
 
 
 # -- the model, read -----------------------------------------------------------------------------------
@@ -465,10 +465,15 @@ def plan(model: Model, box: Machine, ctx: int = 4096, draft: Path | None = None,
     why.append(f"first guess: {estimate:.1f} tokens a second (before measuring)")
     if draft:
         # --spec-type: llama.cpp's default is none, and a draft model given without it is loaded and
-        # never asked (b10991, docs/speculative.md); draft-simple is the plain small-model draft.
-        argv += ["--spec-type", "draft-simple", "--spec-draft-model", str(draft), "--spec-draft-ngl", "all",
+        # never asked (b10991, docs/speculative.md); draft-simple is the plain small-model draft. With
+        # n-gram drafts beside it: on the online engine's T4 (Nimbus 2 Apex, Qwen3-0.6B drafting,
+        # 2026-10-16) the draft alone wrote reasoning at 13.3 tokens a second -- slower than no drafts
+        # at all, 32.6 -- and both together at 38.4, edits at 51.2 against 45.2.
+        kinds = "draft-simple,ngram-simple" if ngram and not model.experts else "draft-simple"
+        argv += ["--spec-type", kinds, "--spec-draft-model", str(draft), "--spec-draft-ngl", "all",
                  "--spec-draft-n-max", str(draft_max), "--spec-draft-n-min", "1"]
-        why.append(f"speculative: {draft.name} proposes up to {draft_max} tokens, the model checks them in one pass")
+        why.append(f"speculative: {draft.name} proposes up to {draft_max} tokens, the model checks them in one pass"
+                   + (", and n-gram drafts from the text so far beside it" if "," in kinds else ""))
     elif ngram and not model.experts:
         # No draft model: guesses from the text already there (llama.cpp's n-gram drafts). An answer that
         # repeats what it was shown -- an agent's edit -- came out at 10.5-10.9 tokens a second against
@@ -630,7 +635,7 @@ def bench(model_path: Path, ctx: int, draft: Path | None = None, tokens: int = 1
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], epilog=f"{NAME} is made by {MAKER}: {HOME}")
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], epilog=f"{NAME} made by {MAKER}: {HOME}")
     ap.add_argument("command", choices=["setup", "plan", "bench", "serve"])
     ap.add_argument("model", type=Path, nargs="?")
     ap.add_argument("--kind", default="auto", choices=["auto", "vulkan", "cuda", "cpu"],

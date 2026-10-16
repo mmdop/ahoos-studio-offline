@@ -5,7 +5,7 @@
 # desktop/packaging/build.py on its own operating system.
 #
 # Run by hand from the Actions tab, or by pushing a tag like v2.0.0 --
-# which also attaches the three packages to a GitHub release.
+# which also attaches the packages and installers to a GitHub release (a draft).
 #
 # Nothing here writes to Hugging Face. Nimbus 1.1's adapter is converted from
 # its published PEFT weights and Nimbus 2 Apex's is fetched as a pinned GGUF;
@@ -65,6 +65,13 @@ jobs:
             desktop/assets/nimbus-2-apex.gguf
           key: adapters-1-1-prime-ee-v1-2-apex-21e406da
 
+      - name: Installer tools (Windows)
+        if: runner.os == 'Windows'
+        # Inno Setup makes the Windows installer; GitHub's image usually has it already.
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+
       - name: Build
         run: python desktop/packaging/build.py
 
@@ -73,7 +80,9 @@ jobs:
           name: AhoosAI-Studio-${{ matrix.label }}
           path: |
             dist/*.zip
+            dist/*-setup.exe
             dist/*.dmg
+            dist/*.deb
             dist/*.tar.gz
           if-no-files-found: error
 

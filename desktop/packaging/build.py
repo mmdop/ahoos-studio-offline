@@ -4,9 +4,14 @@
 
 Output, in dist/:
 
-    Windows   AhoosAI-Studio-<version>-windows-x64.zip       unzip and run the .exe
-    macOS     AhoosAI-Studio-<version>-macos-<arch>.dmg      drag to Applications
-    Linux     AhoosAI-Studio-<version>-linux-<arch>.tar.gz   extract and run
+    Windows   AhoosAI-Studio-<version>-windows-x64-setup.exe  an installer (for this user, no admin)
+              AhoosAI-Studio-<version>-windows-x64.zip        the same, unzip and run the .exe
+    macOS     AhoosAI-Studio-<version>-macos-<arch>.dmg       drag to Applications
+    Linux     AhoosAI-Studio-<version>-linux-<arch>.deb       an installer for Debian and Ubuntu
+              AhoosAI-Studio-<version>-linux-<arch>.tar.gz    extract and run
+
+The Windows installer is made with Inno Setup (ISCC, on GitHub's Windows images), the .deb with
+dpkg-deb; where either is missing the archive alone is made, and the build says so.
 
 WHY EACH PLATFORM BUILDS ITS OWN
 
@@ -125,7 +130,7 @@ def main() -> int:
 
     step("interface")
     # The desktop's own page since 2.5.0; nothing is generated from the web studio.
-    for name in ("studio.html", "studio.css", "studio.js", "i18n.js", "md.js"):
+    for name in ("studio.html", "studio.css", "studio.js", "i18n.js", "md.js", "starters.js"):
         if not (ROOT / "desktop/ui" / name).is_file():
             raise SystemExit(f"interface: desktop/ui/{name} is missing")
 
@@ -175,7 +180,104 @@ def main() -> int:
     step("archive")
     out = package(tag)
     print(f"  {out}  {out.stat().st_size / 1e6:.1f} MB")
+
+    step("installer")
+    made = installer(tag)
+    if made:
+        print(f"  {made}  {made.stat().st_size / 1e6:.1f} MB")
     return 0
+
+
+def iscc() -> str:
+    for candidate in (shutil.which("iscc"), shutil.which("ISCC"),
+                      r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe", r"C:\Program Files\Inno Setup 6\ISCC.exe"):
+        if candidate and Path(candidate).is_file():
+            return candidate
+    return ""
+
+
+def installer(tag: str) -> Path | None:
+    """An installer beside the archive: Inno Setup on Windows, a .deb on Linux (macOS has its .dmg)."""
+    base = f"AhoosAI-Studio-{VERSION}-{tag}"
+    system = platform.system()
+    folder = DIST / NAME
+    if system == "Windows":
+        compiler = iscc()
+        if not compiler:
+            print("  no Inno Setup here (ISCC): the .zip alone")
+            return None
+        script = STAGE / "studio.iss"
+        script.write_text(f"""; AhoosAI Studio's installer, written by desktop/packaging/build.py
+[Setup]
+AppId=AhoosAI-Studio-Offline
+AppName={NAME}
+AppVersion={VERSION}
+AppPublisher=AhoosAI
+AppPublisherURL=https://ahoos-ai.site
+DefaultDirName={{localappdata}}\\Programs\\{NAME}
+DefaultGroupName={NAME}
+PrivilegesRequired=lowest
+DisableProgramGroupPage=yes
+OutputDir={DIST}
+OutputBaseFilename={base}-setup
+SetupIconFile={ROOT / "desktop/assets/icon.ico"}
+UninstallDisplayIcon={{app}}\\{NAME}.exe
+Compression=lzma2/max
+SolidCompression=yes
+ArchitecturesInstallIn64BitMode=x64compatible
+WizardStyle=modern
+
+[Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Tasks]
+Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; GroupDescription: "{{cm:AdditionalIcons}}"
+
+[Files]
+Source: "{folder}\\*"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Icons]
+Name: "{{group}}\\{NAME}"; Filename: "{{app}}\\{NAME}.exe"
+Name: "{{autodesktop}}\\{NAME}"; Filename: "{{app}}\\{NAME}.exe"; Tasks: desktopicon
+
+[Run]
+Filename: "{{app}}\\{NAME}.exe"; Description: "{{cm:LaunchProgram,{NAME}}}"; Flags: nowait postinstall skipifsilent
+""", encoding="utf-8")
+        run(compiler, "/Q", str(script))
+        return DIST / f"{base}-setup.exe"
+    if system == "Linux":
+        if not shutil.which("dpkg-deb"):
+            print("  no dpkg-deb here: the .tar.gz alone")
+            return None
+        arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine().lower(), platform.machine().lower())
+        root = STAGE / "deb"
+        shutil.rmtree(root, ignore_errors=True)
+        (root / "DEBIAN").mkdir(parents=True)
+        shutil.copytree(folder, root / "opt" / "ahoos-studio")
+        (root / "usr" / "bin").mkdir(parents=True)
+        (root / "usr" / "bin" / "ahoos-studio").symlink_to("/opt/ahoos-studio/ahoos-studio")
+        apps = root / "usr" / "share" / "applications"
+        apps.mkdir(parents=True)
+        (apps / "ahoos-studio.desktop").write_text(
+            "[Desktop Entry]\nType=Application\nName=AhoosAI Studio\nComment=The AhoosAI studio, offline\n"
+            "Exec=/opt/ahoos-studio/ahoos-studio\nIcon=ahoos-studio\nCategories=Development;\nTerminal=false\n",
+            encoding="utf-8")
+        icons = root / "usr" / "share" / "icons" / "hicolor" / "256x256" / "apps"
+        icons.mkdir(parents=True)
+        shutil.copy(ROOT / "desktop/assets/icon.png", icons / "ahoos-studio.png")
+        size = sum(f.stat().st_size for f in root.rglob("*") if f.is_file() and not f.is_symlink()) // 1024
+        (root / "DEBIAN" / "control").write_text(
+            f"Package: ahoos-studio\nVersion: {VERSION}\nSection: devel\nPriority: optional\n"
+            f"Architecture: {arch}\nInstalled-Size: {size}\nMaintainer: AhoosAI <noreply@ahoos-ai.site>\n"
+            "Homepage: https://ahoos-ai.site\n"
+            "Description: AhoosAI Studio, offline\n"
+            " The AhoosAI studio on your own computer: Nimbus models run locally, placed by PML-sRUN,\n"
+            " and online models with an API key.\n", encoding="utf-8")
+        out = DIST / f"{base}.deb"
+        out.unlink(missing_ok=True)
+        run("dpkg-deb", "--root-owner-group", "--build", str(root), str(out))
+        return out
+    return None
 
 
 def package(tag: str) -> Path:

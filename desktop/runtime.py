@@ -35,7 +35,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import tether
@@ -135,6 +135,9 @@ class Settings:
     # Two slots sharing one context: a conversation uses the whole of it, and a
     # battle's two answers are generated side by side in the two slots.
     parallel: int = 2
+    # PML-sRUN's plan for this machine (pml_srun.plan): its arguments say where each piece of the
+    # model goes, the context's size and its q8_0 cache, in place of the guesses below.
+    placement: list[str] = field(default_factory=list)
 
 
 class ModelServer:
@@ -148,6 +151,7 @@ class ModelServer:
         self.log: deque[str] = deque(maxlen=400)
         self._reader: threading.Thread | None = None
         self.gpu_note = ""
+        self.placement_note = ""         # PML-sRUN's account of where the model went (app.start_model)
 
     @property
     def base_url(self) -> str:
@@ -159,7 +163,6 @@ class ModelServer:
             "--model", str(self.settings.model),
             "--host", "127.0.0.1",
             "--port", str(self.port),
-            "--ctx-size", str(self.settings.context),
             # Nothing outside this machine may reach it. The API is unauthenticated
             # because it is not reachable, and those two facts have to stay joined.
             "--no-webui",
@@ -173,6 +176,14 @@ class ModelServer:
             # Loaded once; each request says how strongly to apply it (engine.py),
             # so the base model is the same process with the adapter at zero.
             argv += ["--lora", str(self.settings.adapter)]
+        if self.settings.placement:
+            # PML-sRUN placed the model: the plan holds the context, the cache, the threads, the
+            # device and the layers on it. A thread count set in Settings still wins.
+            argv += self.settings.placement
+            if self.settings.threads and "--threads" in argv:
+                argv[argv.index("--threads", len(argv) - len(self.settings.placement)) + 1] = str(self.settings.threads)
+            return argv
+        argv += ["--ctx-size", str(self.settings.context)]
         if self.settings.threads:
             argv += ["--threads", str(self.settings.threads)]
         # Since 3.0 the runtime is llama.cpp's Vulkan build on Windows and Linux

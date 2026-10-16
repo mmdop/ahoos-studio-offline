@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 import uuid
 from pathlib import Path
 from queue import Empty, Queue
@@ -170,11 +171,76 @@ def build(controller: "Controller") -> FastAPI:
             raise bad(error, 404) from error
         return {"ok": True}
 
+    def compact_turn(body: dict) -> StreamingResponse:
+        """Compacting a chat: the model summarises it, and the summary is kept as a message that
+        stands in for every turn before it (agent.Turn.messages) -- the context meter drops."""
+        from .agent import Turn
+
+        try:
+            chat = controller.chats.get(str(body.get("chat_id") or ""))
+        except KeyError:
+            raise HTTPException(404, "No such chat.")
+        if not controller.ready():
+            raise HTTPException(409, controller.not_ready_reason())
+        run_id = uuid.uuid4().hex[:12]
+        cancel = threading.Event()
+        controller.runs[run_id] = cancel
+
+        def work(emit, cancel_flag) -> None:
+            try:
+                history = list(chat["messages"])
+                last = next((m for m in reversed(history) if isinstance(m.get("context"), dict)), None)
+                before = int((last or {}).get("context", {}).get("used") or 0)
+                chosen = controller.online_active()
+                if chosen:
+                    from .online import PROVIDERS, OnlineTurn
+
+                    online = OnlineTurn(settings=controller.settings, provider=chosen[0], model=chosen[1],
+                                        proxy=str(controller.settings["internet"].get("proxy") or ""), history=history,
+                                        emit=emit, cancel=cancel_flag)
+                    emit("run", {"run_id": run_id, "chat_id": chat["id"], "user": None, "profile": online.name,
+                                 "title": chat.get("title", ""), "folder": "", "tools": []})
+                    summary = online.summarise(Turn.SUMMARISE)
+                    if not summary:
+                        emit("error", {"detail": "The model wrote no summary."})
+                        return
+                    after = len(summary) // 3 + 200
+                    saved = controller.chats.append(chat["id"], {
+                        "role": "assistant", "content": summary, "summary": True, "model": online.name, "before": before,
+                        "after": after, "context": {"used": after, "limit": PROVIDERS[chosen[0]]["context"]}})
+                    emit("done", {"message": saved})
+                    return
+                runner = Turn(
+                    llama=controller.llama(), profile=controller.profile(),
+                    settings={**controller.settings, "memory": 1000}, folder=None, inside=None, web=None,
+                    history=history, request=Turn.SUMMARISE, plan=False, emit=emit, cancel=cancel_flag,
+                    ask=lambda key, payload: "deny", needs_asking=lambda name: True, chips="",
+                    first=False, workspace=None, procs=controller.procs)
+                emit("run", {"run_id": run_id, "chat_id": chat["id"], "user": None, "profile": runner.profile.name,
+                             "title": chat.get("title", ""), "folder": "", "tools": []})
+                summary = runner.summarise()
+                if not summary:
+                    emit("error", {"detail": "The model wrote no summary."})
+                    return
+                after = runner._count(runner.render(runner.messages("")[:1])) + runner._count(summary) + 40
+                saved = controller.chats.append(chat["id"], {
+                    "role": "assistant", "content": summary, "summary": True, "model": runner.profile.name,
+                    "before": before, "after": int(after), "context": {"used": int(after), "limit": runner._context()}})
+                emit("done", {"message": saved})
+            except Exception as problem:  # noqa: BLE001 - said to the page, which keeps the chat as it was
+                emit("error", {"detail": str(problem)[:300]})
+            finally:
+                controller.runs.pop(run_id, None)
+
+        return stream(work, cancel)
+
     @app.post("/local/chat")
     async def turn(request: Request) -> StreamingResponse:
         from .agent import Turn
 
         body = await _body(request)
+        if body.get("compact"):
+            return compact_turn(body)
         prompt = str(body.get("prompt", "")).strip()
         retry = bool(body.get("retry"))
         resume_asked = bool(body.get("resume"))
@@ -215,7 +281,19 @@ def build(controller: "Controller") -> FastAPI:
                         emit("error", {"detail": "There is no message to answer again."})
                         return
                     user = history.pop()
-                llama = controller.llama()
+                chosen = controller.online_active()
+                if chosen:
+                    # An online model, worked by the same agent as a local one (online.OnlineEngine): files,
+                    # the terminal, plans, the web, checks and undo, through this computer's connection.
+                    from .agent import Profile
+                    from .online import GENERIC_SYSTEM as ONLINE_SYSTEM, OnlineEngine
+
+                    llama = OnlineEngine(controller.settings, chosen[0], chosen[1],
+                                         proxy=str(controller.settings["internet"].get("proxy") or ""), emit=emit)
+                    profile = Profile(llama.label, "chat", ONLINE_SYSTEM, False, llama.label, "")
+                else:
+                    llama = controller.llama()
+                    profile = controller.profile()
                 web = controller.web() if bool(body.get("web", controller.settings.get("web_on"))) else None
                 # A plan the last turn left unfinished, when "continue" was pressed.
                 resume = None
@@ -225,7 +303,7 @@ def build(controller: "Controller") -> FastAPI:
                         resume = last["plan"]
                 folder = controller.folder_for(chat)
                 runner = Turn(
-                    llama=llama, profile=controller.profile(), settings=controller.settings,
+                    llama=llama, profile=profile, settings=controller.settings,
                     folder=folder, inside=None, web=web, history=history,
                     request=user["content"] if user else prompt, plan=bool(user.get("plan")) if user else plan,
                     emit=emit, cancel=cancel_flag,
@@ -480,6 +558,21 @@ def build(controller: "Controller") -> FastAPI:
         return {"ok": True}
 
     # -- the internet -------------------------------------------------------------------
+
+    @app.post("/local/online/models")
+    async def online_models(request: Request) -> dict:
+        """The models a service offers this key: its /models list (Settings → Online models)."""
+        from .online import Online, OnlineError
+
+        body = await _body(request)
+        try:
+            client = Online(controller.settings.get("online") or {}, str(body.get("provider") or ""),
+                            str(controller.settings["internet"].get("proxy") or ""))
+            started = time.monotonic()
+            models = await asyncio.to_thread(client.models)
+            return {"ok": True, "models": models, "seconds": round(time.monotonic() - started, 1)}
+        except OnlineError as error:
+            return {"ok": False, "error": str(error)}
 
     @app.post("/local/internet/test")
     async def test_internet() -> dict:

@@ -91,13 +91,17 @@ From [Releases](../../releases/latest):
 
 | System | File |
 |---|---|
-| Windows 10 / 11 (64-bit) | `AhoosAI-Studio-…-windows-x64.zip` |
+| Windows 10 / 11 (64-bit) | `AhoosAI-Studio-…-windows-x64-setup.exe` (installer) or `…-windows-x64.zip` |
 | macOS, Apple silicon | `AhoosAI-Studio-…-macos-arm64.dmg` |
 | macOS, Intel | `AhoosAI-Studio-…-macos-x64.dmg` |
-| Linux (64-bit) | `AhoosAI-Studio-…-linux-x64.tar.gz` |
+| Linux, Debian / Ubuntu | `AhoosAI-Studio-…-linux-x64.deb` (`sudo apt install ./AhoosAI-Studio-…-linux-x64.deb`) |
+| Linux, other (64-bit) | `AhoosAI-Studio-…-linux-x64.tar.gz` |
 
-Unpack it and run **AhoosAI Studio**. On first start it asks which model and
-which size to download.
+Run the installer (on Windows it installs for your user, no administrator needed), or unpack
+the archive, and open **AhoosAI Studio**. On first start it asks which model and which size to
+download. With an API key (Settings › Online models) it can also work with an online model —
+AhoosAI's Nimbus 2 Apex, OpenAI, OpenRouter, Groq, Gemini, DeepSeek or any OpenAI-compatible
+service — with every tool the local model has.
 
 **Nimbus 2 Apex**, on Qwen3-8B:
 

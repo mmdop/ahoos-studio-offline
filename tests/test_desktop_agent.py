@@ -448,6 +448,50 @@ class AgentTurn(unittest.TestCase):
                     cancel=threading.Event(), ask=lambda key, payload: answer, needs_asking=lambda key: True,
                     first=True, **extra)
 
+    def test_a_summary_stands_in_for_the_turns_before_it(self):
+        history = [{"role": "user", "content": "first question"}, {"role": "assistant", "content": "first answer"},
+                   {"role": "assistant", "content": "NOTES: the user wants a game.", "summary": True},
+                   {"role": "user", "content": "second question"}, {"role": "assistant", "content": "second answer"}]
+        turn = Turn(llama=Echo(delay=0), profile=Profile("Echo", "chat", "You are a test.", True),
+                    settings={"memory": 6}, folder=None, inside=None, web=None, history=history, request="third",
+                    plan=False, emit=lambda e, d: None, cancel=threading.Event(), ask=lambda k, p: "allow",
+                    needs_asking=lambda k: True)
+        text = "\n".join(m["content"] for m in turn.messages("third"))
+        self.assertIn("NOTES: the user wants a game.", text)
+        self.assertNotIn("first question", text)
+        self.assertIn("second question", text)
+        roles = [m["role"] for m in turn.messages("third")][1:]
+        self.assertTrue(all(a != b for a, b in zip(roles, roles[1:])), roles)
+
+    def test_apex_thinks_again_after_a_step_on_a_smaller_budget(self):
+        events: list = []
+        turn = Turn(llama=Echo(delay=0), profile=Profile("Apex", "apex", "", True), settings={"memory": 0, "level": 5},
+                    folder=None, inside=None, web=None, history=[], request="read the file", plan=False,
+                    emit=lambda e, d: events.append((e, d)), cancel=threading.Event(), ask=lambda k, p: "allow",
+                    needs_asking=lambda k: True)
+        turn.transcript = turn.messages("read the file")
+        first = turn._think(turn.render(turn.transcript))
+        turn.steps.append({"id": "s1", "name": "read_file"})
+        prefix = turn._think_again()
+        self.assertTrue(prefix.startswith("<think>\n") and prefix.endswith("\n</think>\n\n"))
+        self.assertEqual([t["again"] for t in turn.thoughts], [False, True])
+        self.assertEqual(turn.thoughts[1]["at"], 1)                    # after the first step
+        self.assertEqual(turn.think, first)                            # the turn's reasoning is the first block
+        self.assertTrue(any(e == "think" and d.get("again") for e, d in events))
+        self.assertTrue(any(e == "think_end" and d.get("again") for e, d in events))
+
+    def test_a_turn_says_how_full_the_context_is_and_a_chat_can_be_summarised(self):
+        turn = self.turn("hello", folder=None)
+        message = turn.run(turn.sent_text([]))
+        self.assertEqual(message["context"]["limit"], 16384)
+        self.assertGreater(message["context"]["used"], 0)
+        events: list = []
+        summariser = self.turn(Turn.SUMMARISE, folder=None, events=events,
+                               history=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}])
+        summary = summariser.summarise()
+        self.assertTrue(summary)
+        self.assertIn("delta", [e for e, _ in events])
+
     def test_asked_to_make_a_file_it_plans_writes_and_checks(self):
         events: list = []
         turn = self.turn("make a file", events=events)

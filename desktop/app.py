@@ -38,7 +38,7 @@ import uuid
 import webbrowser
 from pathlib import Path
 
-from . import __version__, catalogue, family, runtime
+from . import __version__, catalogue, family, online, runtime
 from .agent import Profile
 from .battle import Battles
 from .chats import Chats
@@ -64,6 +64,7 @@ DEFAULT_SETTINGS = {
     "threads": 0,
     "gpu_layers": 0,            # 0 = as many as fit (the runtime decides); kept for 2.x settings files
     "gpu": "auto",              # auto | off -- whether the graphics card is used at all
+    "srun": True,               # PML-sRUN places the model (desktop/pml_srun.py); off: llama.cpp's own fit
     # Apex's two dials. Level 5 and temperature 5 are what the model was trained
     # and measured at. Other models read the temperature as a plain dial (engine.DIAL).
     "level": 5,
@@ -81,6 +82,8 @@ DEFAULT_SETTINGS = {
     "internet": WEB_DEFAULT,
     "agent": {"files": True, "commands": True, "max_steps": 40, "command_timeout": 120},
     "hf_token": "",
+    # Online models (online.py): keys, the models in the picker, the one in use ("" = this computer's).
+    "online": online.DEFAULT,
     "chips_on": ["builtin-rtl-web"],
     "battle": {"mode": "parallel", "blind": False, "strength": 1.0},
     "language": "",             # "" follows the system
@@ -208,6 +211,9 @@ class Controller:
                     restart = True
         if "web_on" in patch:
             self.settings["web_on"] = bool(patch["web_on"])
+        if "srun" in patch and bool(patch["srun"]) != bool(self.settings.get("srun", True)):
+            self.settings["srun"] = bool(patch["srun"])
+            restart = True
         if isinstance(patch.get("workspace"), str):
             self.settings["workspace"] = patch["workspace"].strip()
         if isinstance(patch.get("hf_token"), str):
@@ -233,6 +239,8 @@ class Controller:
                 internet["proxy"] = str(given["proxy"] or "").strip()
             if "allow_local" in given:
                 internet["allow_local"] = bool(given["allow_local"])
+        if isinstance(patch.get("online"), dict):
+            self._update_online(patch["online"])
         if isinstance(patch.get("agent"), dict):
             agent = self.settings["agent"]
             for key in ("files", "commands"):
@@ -252,6 +260,37 @@ class Controller:
                 battle["strength"] = max(0.1, min(2.0, float(patch["battle"]["strength"])))
         self.save_settings()
         return restart
+
+    def _update_online(self, given: dict) -> None:
+        stored = online.merged(self.settings.get("online"))
+        if isinstance(given.get("keys"), dict):
+            for provider, key in given["keys"].items():
+                if provider in online.PROVIDERS:
+                    key = str(key or "").strip()
+                    if key:
+                        stored["keys"][provider] = key
+                    else:
+                        stored["keys"].pop(provider, None)          # an empty key removes it
+        if isinstance(given.get("base"), str):
+            stored["base"] = given["base"].strip()
+        if isinstance(given.get("models"), dict):
+            for provider, models in given["models"].items():
+                if provider in online.PROVIDERS and isinstance(models, list):
+                    stored["models"][provider] = [str(m).strip() for m in models if str(m).strip()][:30]
+        if isinstance(given.get("active"), dict):
+            provider = str(given["active"].get("provider") or "")
+            model = str(given["active"].get("model") or "").strip()
+            chosen = provider in online.PROVIDERS and model
+            stored["active"] = {"provider": provider, "model": model} if chosen else {"provider": "", "model": ""}
+        self.settings["online"] = stored
+
+    def online_active(self) -> tuple[str, str] | None:
+        """The online model chats go to, when one is chosen and has a key; None: this computer's."""
+        data = online.merged(self.settings.get("online"))
+        provider, model = data["active"]["provider"], data["active"]["model"]
+        if provider in online.PROVIDERS and model and data["keys"].get(provider):
+            return provider, model
+        return None
 
     # -- what is installed -------------------------------------------------------
 
@@ -353,7 +392,7 @@ class Controller:
         self.start_model()
 
     def ready(self) -> bool:
-        return self.engine != "local" or self.state == "ready"
+        return self.engine != "local" or self.state == "ready" or self.online_active() is not None
 
     def not_ready_reason(self) -> str:
         if self.state == "loading":
@@ -384,11 +423,46 @@ class Controller:
 
         gpu = self.settings.get("gpu", "auto") != "off"
 
+        def placement(use_gpu: bool, cautious: bool = False) -> tuple[list[str], str]:
+            """PML-sRUN's plan for this model on this machine: its arguments and why. On the
+            processor-only retry, or with it switched off, llama.cpp places the model itself.
+            `cautious`: two layers (or two layers' experts) fewer on the card -- the plan's margin is
+            measured on one card, and another's compute buffers can be bigger."""
+            if not use_gpu or not self.settings.get("srun", True):
+                return [], ""
+            try:
+                from . import pml_srun as srun
+
+                os.environ.setdefault("LLAMA_SERVER", str(runtime.find_binary()))
+                model, box, ctx = srun.read_gguf(Path(base["path"])), srun.machine(), int(self.settings["context"])
+                plan = srun.plan(model, box, ctx=ctx)
+                if cautious and "--n-gpu-layers" in plan.argv and "--n-cpu-moe" in plan.argv:
+                    n = int(plan.argv[plan.argv.index("--n-cpu-moe") + 1])
+                    plan = srun.plan(model, box, ctx=ctx, experts_on_cpu=min(model.layers, n + 2))
+                elif cautious and "--n-gpu-layers" in plan.argv:
+                    n = int(plan.argv[plan.argv.index("--n-gpu-layers") + 1])
+                    if n <= 2:
+                        return [], ""
+                    plan = srun.plan(model, box, ctx=ctx, layers_on_card=n - 2)
+                return plan.argv, plan.describe()
+            except Exception as error:  # noqa: BLE001 - a plan is an improvement, never a reason not to start
+                return [], f"PML-sRUN could not plan here ({error}); llama.cpp placed the model itself."
+
         def work() -> None:
             # With the graphics card first; if the server dies loading that way --
             # an old driver, a card the Vulkan build cannot use -- once more on
             # the processor alone, rather than leaving the person with no model.
-            for use_gpu in ([True, False] if gpu else [False]):
+            # With PML-sRUN's plan first; if that server dies, the card as llama.cpp places it, then
+            # the processor alone.
+            # Between the plan and llama.cpp's own placement, the plan with two layers fewer on the card.
+            planned = gpu and self.settings.get("srun", True)
+            attempts = (([(True, "plan"), (True, "cautious")] if planned else []) + ([(True, "")] if gpu else [])
+                        + [(False, "")])
+            for number, (use_gpu, use_plan) in enumerate(attempts):
+                last_try = number == len(attempts) - 1
+                argv, why = placement(use_gpu, cautious=use_plan == "cautious") if use_plan else ([], "")
+                if use_plan and not argv:
+                    continue                               # no plan here: the next attempt is the same without it
                 with self._lock:
                     self.stop_model()
                     self.state, self.error, self.error_kind = "loading", "", ""
@@ -400,7 +474,9 @@ class Controller:
                             threads=int(self.settings["threads"]),
                             gpu_layers=int(self.settings["gpu_layers"]),
                             gpu=use_gpu,
+                            placement=argv,
                         ))
+                        server.placement_note = why
                         server.start()
                         self.server = server
                     except runtime.RuntimeError_ as exc:
@@ -415,7 +491,7 @@ class Controller:
                 except runtime.RuntimeError_ as exc:
                     if self.server is not server:
                         return
-                    if use_gpu:
+                    if not last_try:
                         server.stop()
                         continue
                     self.state, self.error = "failed", str(exc)
@@ -765,15 +841,23 @@ class Controller:
                             (internet.get("keys") or {}).items() if v}
         if internet.get("custom", {}).get("key"):
             internet["custom"]["key"] = "set"
-        settings = {k: v for k, v in self.settings.items() if k not in ("internet", "hf_token", "model", "build")}
+        settings = {k: v for k, v in self.settings.items() if k not in ("internet", "hf_token", "model", "build", "online")}
+        chosen = self.online_active()
+        shown = {"name": profile.name, "engine": profile.engine, "base": profile.base_name,
+                 "adapter": profile.adapter_name, "has_adapter": profile.has_adapter}
+        if chosen:
+            # An online model answers: the page shows it, and its dials (Apex's level for ours).
+            spec = online.PROVIDERS[chosen[0]]
+            shown = {"name": chosen[1], "engine": "apex" if spec.get("apex") else "chat",
+                     "base": spec["name"], "adapter": "", "has_adapter": False, "online": True, "provider": chosen[0]}
         return {
             "version": __version__,
             "engine": self.engine,
-            "state": self.state if self.engine == "local" else "ready",
+            "state": "ready" if chosen else self.state if self.engine == "local" else "ready",
             "error": self.error,
             "error_kind": self.error_kind,
-            "profile": {"name": profile.name, "engine": profile.engine, "base": profile.base_name,
-                        "adapter": profile.adapter_name, "has_adapter": profile.has_adapter},
+            "profile": shown,
+            "online": online.public(self.settings.get("online")),
             "active": {"base": base["key"] if base else "", "adapter": adapter["key"] if adapter else ""},
             "bases": self.bases(),
             "adapters": self.adapters(),
@@ -791,6 +875,7 @@ class Controller:
             "workspace": str(self.workspace()),
             "procs": self.procs.public(),
             "gpu": self.server.gpu_note if self.server else "",
+            "placement": getattr(self.server, "placement_note", "") if self.server else "",
             "allowed": len(self.allowed),
             "window": self.window is not None,
         }

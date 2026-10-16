@@ -455,7 +455,8 @@
       <button class="icon-btn" id="showSide" title="${t('toggle_sidebar')} (Ctrl+B)">${ic('sidebar')}</button>
       <button class="picker" id="picker" aria-haspopup="menu" aria-expanded="false">
         <span class="nm" dir="auto">${esc(st.profile.name)}</span>
-        ${base && base.quant ? `<span class="q ltr">${esc(base.quant)}</span>` : ''}
+        ${st.profile.online ? `<span class="q">${ic('globe', 'sm')}${esc(st.profile.base)}</span>`
+          : base && base.quant ? `<span class="q ltr">${esc(base.quant)}</span>` : ''}
         ${st.state !== 'ready' ? `<span class="state ${st.state}">${esc({ loading: t('state_loading'), failed: t('state_failed'), missing: t('state_missing') }[st.state] || '')}</span>` : ''}${ic('chev', 'sm chev')}</button>
       <span class="spacer"></span>
       <button class="chip${folderName ? ' on' : ' warn'}" id="folderChip" title="${esc(currentFolder() || t('no_folder'))}">${ic('folder', 'sm')}<span class="lbl" dir="auto">${esc(folderName || t('connect_folder'))}</span></button>
@@ -498,12 +499,14 @@
 
   function modelMenu(anchor) {
     const st = S.status;
+    const online = st.online || { providers: [], active: {} };
+    const usingOnline = !!(st.profile && st.profile.online);
     const menu = h('<div></div>');
     menu.appendChild(h(`<div class="pop-h">${t('on_this_computer')}</div>`));
     const list = combos();
     if (!list.length) menu.appendChild(h(`<div class="side-empty">${t('no_models_yet')}</div>`));
     for (const c of list) {
-      const on = st.active.base === c.base.key && st.active.adapter === (c.adapter ? c.adapter.key : '');
+      const on = !usingOnline && st.active.base === c.base.key && st.active.adapter === (c.adapter ? c.adapter.key : '');
       const row = h(`<button class="item${on ? ' sel' : ''}">
         <span class="step-ico">${ic(c.adapter ? 'layers' : 'cube', 'sm')}</span>
         <span class="grow"><b dir="auto">${esc(c.name)}</b><small dir="auto">${esc(c.sub)}</small></span>
@@ -512,7 +515,10 @@
         closePop();
         if (on) return;
         try {
-          S.status = await api('/local/select', { base: c.base.key, adapter: c.adapter ? c.adapter.key : '' });
+          // Back to this computer: the online model is put down first.
+          if (usingOnline) await api('/local/settings', { online: { active: { provider: '', model: '' } } });
+          const same = st.active.base === c.base.key && st.active.adapter === (c.adapter ? c.adapter.key : '');
+          S.status = same ? await api('/local/status') : await api('/local/select', { base: c.base.key, adapter: c.adapter ? c.adapter.key : '' });
           paintStatus(null);
           paintComposer();
           toast(t('switching_to', { name: c.name }));
@@ -521,11 +527,38 @@
       };
       menu.appendChild(row);
     }
+    // Online models: every service with a key, and the models put in the picker for it.
+    const ready = (online.providers || []).filter(p => p.key);
+    menu.appendChild(h(`<div class="pop-h">${t('online_models')}</div>`));
+    if (!ready.length) menu.appendChild(h(`<div class="side-empty">${t('online_none')}</div>`));
+    for (const p of ready) {
+      for (const model of p.models || []) {
+        const on = usingOnline && online.active.provider === p.id && online.active.model === model;
+        const row = h(`<button class="item${on ? ' sel' : ''}">
+          <span class="step-ico">${ic(p.id === 'ahoosai' ? 'mark' : 'globe', 'sm')}</span>
+          <span class="grow"><b dir="ltr" style="text-align:start">${esc(model)}</b><small>${esc(p.name)}${p.id === 'ahoosai' ? ' · ' + t('ours') : ''}</small></span>
+          ${on ? ic('check', 'tick') : ''}</button>`);
+        row.onclick = () => { closePop(); if (!on) useOnline(p, model); };
+        menu.appendChild(row);
+      }
+    }
     menu.appendChild(h('<hr>'));
     const manage = h(`<button class="item">${ic('cube', 'sm')}<span class="grow"><b>${t('manage_models')}</b><small>${t('manage_models_sub')}</small></span></button>`);
     manage.onclick = () => { closePop(); go('models'); };
     menu.appendChild(manage);
+    const keys = h(`<button class="item">${ic('key', 'sm')}<span class="grow"><b>${t('online_manage')}</b><small>${t('online_manage_sub')}</small></span></button>`);
+    keys.onclick = () => { closePop(); S.settingsTab = 'online'; go('settings'); };
+    menu.appendChild(keys);
     popover(anchor, menu, { width: 340 });
+  }
+
+  async function useOnline(provider, model) {
+    const done = await setting({ online: { active: { provider: provider.id, model } } }, true);
+    if (!done) return;
+    paintStatus(null);
+    paintComposer();
+    toast(t('online_now', { model, name: provider.name }), 'ok', 2600);
+    if (S.view === 'settings') paintOnline();
   }
 
   function folderMenu(anchor) {
@@ -601,9 +634,13 @@
     if (document.startViewTransition && !document.hidden && document.documentElement.dataset.motion !== 'reduced') {
       // A transition that cannot run (the window is minimised, another one is
       // under way) rejects; the swap has still happened, so that is not an error.
-      const transition = document.startViewTransition(swap);
+      // ... and a page that is not painting never calls a transition back: the swap happens anyway.
+      let swapped = false;
+      const once = () => { if (!swapped) { swapped = true; swap(); } };
+      const transition = document.startViewTransition(once);
       transition.ready.catch(() => {});
       transition.finished.catch(() => {});
+      setTimeout(once, 400);
     } else swap();
   }
 
@@ -614,18 +651,29 @@
     view.innerHTML = `
       <div class="scroller scroll" id="scroller"><div class="empty" id="empty"></div><div class="thread" id="thread"></div></div>
       <div class="composer-wrap">
+        <div class="sheet" id="sheet" hidden></div>
         <button class="jump" id="jump" title="${t('to_bottom')}">${ic('down', 'sm')}</button>
         <form class="composer" id="composer" autocomplete="off">
           <div class="attach-list" id="attachList"></div>
           <textarea id="input" rows="1" dir="auto" placeholder="${t('placeholder')}"></textarea>
           <div class="bar">
-            <button type="button" class="tool" id="attachBtn" title="${t('attach')}">${ic('clip', 'sm')}</button>
-            <button type="button" class="tool" id="skillsBtn" title="${t('skills')}">${ic('sparkle', 'sm')}<span id="skillsCount"></span></button>
-            <button type="button" class="tool" id="webBtn" title="${t('web_chip_title')}">${ic('globe', 'sm')}<span>${t('search_web_short')}</span></button>
-            <button type="button" class="tool" id="planBtn" title="${t('plan_title')}">${ic('plan', 'sm')}<span>${t('plan')}</span></button>
-            <button type="button" class="tool" id="levelBtn" title="${t('level_title')}">${ic('bulb', 'sm')}<span id="levelLbl"></span></button>
-            <button type="button" class="tool" id="tempBtn" title="${t('temp_title')}">${ic('thermo', 'sm')}<span id="tempLbl"></span></button>
+            <button type="button" class="tool tools-btn" id="toolsBtn" title="${t('tools_title')}">${ic('sliders', 'sm')}<span class="dot" id="toolsDot"></span></button>
+            <div class="mode" id="modeSeg" role="radiogroup" aria-label="${t('mode_title')}">
+              <span class="thumb"></span>
+              <button type="button" role="radio" data-m="normal">${t('mode_normal')}</button>
+              <button type="button" role="radio" data-m="plan">${ic('plan', 'sm')}${t('mode_plan')}</button>
+            </div>
+            <button type="button" class="tool web-btn" id="webBtn" title="${t('web_chip_title')}">${ic('globe', 'sm')}</button>
             <span class="grow"></span>
+            <button type="button" class="ctx" id="ctxBtn" title="${t('ctx_title_short')}">
+              <svg viewBox="0 0 36 36" aria-hidden="true">
+                <defs><clipPath id="ctxClip"><circle cx="18" cy="18" r="13"/></clipPath></defs>
+                <g clip-path="url(#ctxClip)"><g class="water" id="ctxWater">
+                  <path class="wave" d="M-36 4 Q-27 0 -18 4 T0 4 T18 4 T36 4 T54 4 T72 4 V60 H-36 Z"/>
+                </g></g>
+                <circle class="rim" cx="18" cy="18" r="15.5"/>
+              </svg>
+            </button>
             <button type="submit" class="send" id="send" title="${t('send')}">${ic('send')}</button>
           </div>
           <input type="file" id="fileInput" multiple hidden>
@@ -640,12 +688,7 @@
       </div>`;
     wireComposer();
     wireTerminal();
-    const scroller = $('#scroller');
-    scroller.addEventListener('scroll', () => {
-      const away = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 160;
-      $('#jump').classList.toggle('on', away);
-      $('#top').classList.toggle('scrolled', scroller.scrollTop > 4);
-    });
+    watchScroll($('#scroller'));
     $('#jump').onclick = () => scrollDown(true);
     $('#thread').addEventListener('click', threadClick);
     paintThread();
@@ -656,19 +699,38 @@
     const st = settingsOf();
     const internet = (S.status.internet || {}).mode || 'off';
     $('#webBtn').classList.toggle('on', internet !== 'off' && !!st.web_on);
-    $('#planBtn').classList.toggle('on', S.plan);
-    $('#levelBtn').style.display = apex() ? '' : 'none';
-    $('#levelLbl').textContent = t('level_n', { n: num(st.level || 5) });
-    $('#tempLbl').textContent = num(st.temperature || 5) + '/' + num(10);
-    const on = S.chips.filter(c => c.on).length;
-    $('#skillsCount').textContent = on ? num(on) : '';
-    $('#skillsBtn').classList.toggle('on', on > 0);
+    const skills = S.chips.filter(c => c.on).length;
+    const level = st.level || 5, temp = st.temperature || 5;
+    // The tools button shows a dot when something in its panel is away from the defaults.
+    $('#toolsDot').classList.toggle('on', skills > 0 || (apex() && level !== 5) || temp !== 5);
+    $('#toolsBtn').title = t('tools_title') + (apex() ? ` · ${t('level_n', { n: num(level) })}` : '') +
+      ` · ${num(temp)}/${num(10)}` + (skills ? ` · ${t('skills')}: ${num(skills)}` : '');
+    paintMode();
+    paintContext();
     const foot = $('#foot');
     const memory = st.memory || 0;
     foot.innerHTML = `<span>${ic('brain', 'sm')}${memory ? t('memory_n', { n: num(memory) }) : t('memory_off')}</span>
       <span>${ic('shield', 'sm')}${st.permission === 'auto' ? t('perm_auto_short') : st.permission === 'session' ? t('perm_session_short') : t('perm_ask_short')}</span>
       <span class="ltr" style="direction:inherit">${t('enter_hint')}</span>`;
     setSending(!!S.run);
+  }
+
+  function paintMode() {
+    const seg = $('#modeSeg');
+    if (!seg) return;
+    $$('button', seg).forEach(b => {
+      const on = (b.dataset.m === 'plan') === S.plan;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-checked', on);
+    });
+    seg.classList.toggle('plan', S.plan);
+    requestAnimationFrame(() => {
+      const on = $('button.on', seg);
+      const thumb = $('.thumb', seg);
+      if (on && thumb) { thumb.style.left = on.offsetLeft + 'px'; thumb.style.width = on.offsetWidth + 'px'; }
+    });
+    $('#composer').classList.toggle('planning', S.plan);
+    $('#input').placeholder = S.plan ? t('placeholder_plan') : t('placeholder');
   }
 
   function setSending(on) {
@@ -678,13 +740,100 @@
     send.innerHTML = on ? ic('stop') : ic('send');
     send.title = on ? t('stop') + ' (Esc)' : t('send');
     send.disabled = false;
+    $('#composer').classList.toggle('busy', on);
+  }
+
+  /* ---- the context meter: a glass that fills as the conversation takes the model's memory ---- */
+
+  const AUTO_COMPACT = 0.85;          // past this share of the context, the chat is compacted before sending
+
+  function contextOf(chat) {
+    // The last turn's own count (agent.Turn.run); after a compaction, the summary's.
+    const messages = (chat && chat.messages) || [];
+    const limit = (S.status && S.status.settings && S.status.settings.context) || 8192;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.context && m.context.used) return { used: m.context.used, limit: m.context.limit || limit };
+    }
+    return { used: 0, limit };
+  }
+
+  function paintContext() {
+    const button = $('#ctxBtn');
+    if (!button) return;
+    const ctx = contextOf(S.chat);
+    const share = Math.max(0, Math.min(1, ctx.used / ctx.limit));
+    $('#ctxWater').style.transform = `translateY(${(1 - share) * 26 + 1}px)`;
+    button.classList.toggle('warn', share >= 0.7 && share < 0.88);
+    button.classList.toggle('bad', share >= 0.88);
+    button.classList.toggle('idle', ctx.used === 0);
+    button.title = ctx.used ? t('ctx_title', { used: num(ctx.used), limit: num(ctx.limit), pct: num(share * 100) }) : t('ctx_title_short');
+  }
+
+  function contextMenu(anchor) {
+    const ctx = contextOf(S.chat);
+    const share = ctx.used / ctx.limit;
+    const node = h(`<div class="ctx-pop"><div class="row2"><b>${t('ctx_head')}</b><span class="big">${num(share * 100)}%</span></div>
+      <div class="ctx-bar"><i style="width:${Math.min(100, share * 100)}%"></i></div>
+      <p class="say">${ctx.used ? t('ctx_title', { used: num(ctx.used), limit: num(ctx.limit), pct: num(share * 100) }) : t('ctx_none')}</p>
+      <p class="say">${t('compact_lead')}</p>
+      <button class="btn sm" id="compactBtn"${!S.chat || !S.chatId || S.run || (S.chat.messages || []).length < 2 ? ' disabled' : ''}>${ic('layers', 'sm')}${t('compact_btn')}</button></div>`);
+    $('#compactBtn', node).onclick = () => { closePop(); compact(); };
+    popover(anchor, node, { up: true, align: 'end', width: 300 });
+  }
+
+  /** The panel behind the tools button: files, skills, and the dials, together. */
+  function toolsPanel(anchor) {
+    const st = settingsOf();
+    const level = st.level || 5, temp = st.temperature || 5;
+    const node = h(`<div class="tools-pop">
+      <button type="button" class="item" data-a="attach">${ic('clip', 'sm')}<span class="grow"><b>${t('attach_title')}</b><small>${t('attach_sub')}</small></span></button>
+      <hr>
+      ${apex() ? `<div class="dial"><div class="row2"><b>${ic('bulb', 'sm')}${t('level_title')}</b><span class="big" data-v="level">${num(level)}</span></div>
+        <input type="range" min="1" max="20" step="1" value="${level}" data-r="level" aria-label="${t('level_title')}">
+        <p class="say" data-say="level"></p></div>` : ''}
+      <div class="dial"><div class="row2"><b>${ic('thermo', 'sm')}${t('temp_title')}</b><span class="big" data-v="temp">${num(temp)}</span></div>
+        <input type="range" min="1" max="10" step="1" value="${temp}" data-r="temp" aria-label="${t('temp_title')}">
+        <p class="say" data-say="temp"></p></div>
+      <hr>
+      <div class="pop-h">${ic('sparkle', 'sm')} ${t('skills')}</div>
+      <div class="skills-list"></div>
+      <button type="button" class="item" data-a="manage">${ic('sliders', 'sm')}<span class="grow">${t('manage_skills')}</span></button>
+    </div>`);
+    const rLevel = $('[data-r=level]', node);
+    if (rLevel) {
+      const say = v => { $('[data-v=level]', node).textContent = num(v); $('[data-say=level]', node).textContent = t('level_say', { w: num(words(v)) }); };
+      rangeFill(rLevel);
+      say(level);
+      rLevel.oninput = () => say(Number(rLevel.value));
+      rLevel.onchange = () => setting({ level: Number(rLevel.value) }, true).then(paintComposer);
+    }
+    const rTemp = rangeFill($('[data-r=temp]', node));
+    const sayTemp = v => { $('[data-v=temp]', node).textContent = num(v); $('[data-say=temp]', node).textContent = t(TEMP_SAY[v - 1]) + (v === 5 ? ' · ' + t('t_default') : ''); };
+    sayTemp(temp);
+    rTemp.oninput = () => sayTemp(Number(rTemp.value));
+    rTemp.onchange = () => setting({ temperature: Number(rTemp.value) }, true).then(paintComposer);
+    const list = $('.skills-list', node);
+    if (!S.chips.length) list.appendChild(h(`<div class="side-empty">${t('no_skills')}</div>`));
+    for (const chip of S.chips) {
+      const row = h(`<div class="item"><span class="grow"><b dir="auto">${esc(chip.name)}</b><small dir="auto">${esc(chip.summary || '')}</small></span></div>`);
+      row.appendChild(switcher(chip.on, async on => {
+        chip.on = on;
+        await setting({ chips_on: S.chips.filter(c => c.on).map(c => c.id) }, true);
+        paintComposer();
+      }));
+      list.appendChild(row);
+    }
+    $('[data-a=attach]', node).onclick = () => { closePop(); $('#fileInput').click(); };
+    $('[data-a=manage]', node).onclick = () => { closePop(); S.settingsTab = 'skills'; go('settings'); };
+    popover(anchor, node, { up: true, width: 330 });
   }
 
   function wireComposer() {
     const input = $('#input');
     const form = $('#composer');
     const grow = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 240) + 'px'; };
-    input.addEventListener('input', grow);
+    input.addEventListener('input', () => { grow(); form.classList.toggle('typed', !!input.value.trim()); });
     input.addEventListener('focus', () => form.classList.add('focus'));
     input.addEventListener('blur', () => form.classList.remove('focus'));
     input.addEventListener('keydown', e => {
@@ -697,9 +846,10 @@
       if (!text) { input.focus(); return; }
       input.value = '';
       grow();
+      form.classList.remove('typed');
+      closeSheet();
       send(text);
     });
-    $('#attachBtn').onclick = () => $('#fileInput').click();
     $('#fileInput').onchange = e => { addFiles([...e.target.files]); e.target.value = ''; };
     form.addEventListener('dragover', e => { e.preventDefault(); form.classList.add('drag'); });
     form.addEventListener('dragleave', () => form.classList.remove('drag'));
@@ -708,11 +858,16 @@
       const files = [...(e.clipboardData || {}).files || []];
       if (files.length) { e.preventDefault(); addFiles(files); }
     });
+    $('#toolsBtn').onclick = e => toolsPanel(e.currentTarget);
+    $$('#modeSeg button').forEach(b => {
+      b.onclick = () => {
+        S.plan = b.dataset.m === 'plan';
+        paintMode();
+        toast(S.plan ? t('plan_on_toast') : t('plan_off_toast'), 'info', 1800);
+      };
+    });
     $('#webBtn').onclick = () => $('#webChip').click();
-    $('#planBtn').onclick = () => { S.plan = !S.plan; paintComposer(); toast(S.plan ? t('plan_on') : t('plan_off'), 'info', 1600); };
-    $('#skillsBtn').onclick = e => skillsMenu(e.currentTarget);
-    $('#levelBtn').onclick = e => levelDial(e.currentTarget);
-    $('#tempBtn').onclick = e => tempDial(e.currentTarget);
+    $('#ctxBtn').onclick = e => contextMenu(e.currentTarget);
     paintComposer();
   }
 
@@ -793,46 +948,115 @@
 
   /* ---- the empty state ------------------------------------------------------------ */
 
+  function greeting() {
+    const hour = new Date().getHours();
+    return hour >= 4 && hour < 12 ? t('greet_morning') : hour >= 12 && hour < 17 ? t('greet_day')
+      : hour >= 17 && hour < 22 ? t('greet_evening') : t('greet_night');
+  }
+
+  /* Starting points (starters.js): a category opens a sheet of prompts with blanks to fill. "Project"
+     is shown with a folder connected; images are the online studio's. */
+  const starters = () => (window.STARTERS || []).filter(s => !s.image && (!s.folder || !!currentFolder()));
+
   function renderEmpty() {
     const empty = $('#empty');
     if (!empty || !S.status) return;
     const st = S.status;
     const hasChat = S.chat && S.chat.messages.length;
-    empty.style.display = hasChat || S.run ? 'none' : '';
-    if (hasChat || S.run) return;
+    const on = !(hasChat || S.run);
+    empty.style.display = on ? '' : 'none';
+    $('#scroller') && $('#scroller').classList.toggle('is-empty', on);
+    if (!on) return;
     const folderName = currentFolder() ? currentFolder().split(/[\\/]/).filter(Boolean).pop() : '';
     const internet = (st.internet || {}).mode || 'off';
-    const ideas = st.folder
-      ? [['book', 'idea_explain', 'idea_explain_p'], ['bug', 'idea_bugs', 'idea_bugs_p'],
-         ['file-plus', 'idea_readme', 'idea_readme_p'], ['play', 'idea_run', 'idea_run_p']]
-      : [['code', 'idea_script', 'idea_script_p'], ['book', 'idea_teach', 'idea_teach_p'],
-         ['layers', 'idea_page', 'idea_page_p'], ['globe', 'idea_news', 'idea_news_p']];
-    const hour = new Date().getHours();
-    const greet = hour < 5 ? t('greet_night') : hour < 12 ? t('greet_morning') : hour < 18 ? t('greet_day') : t('greet_evening');
     empty.innerHTML = `
       <svg class="hero-mark mark" aria-hidden="true"><use href="#i-mark"/></svg>
-      <h2>${esc(greet)} <span class="g">${t('hero_q')}</span></h2>
+      <h2>${esc(greeting())} <span class="g">${t('hero_q')}</span></h2>
       <p class="sub" dir="auto">${t('hero_sub', { name: esc(st.profile.name) })}</p>
+      <div class="starters">${starters().map((s, i) => `
+        <button class="starter" data-s="${s.id}" style="animation-delay:${80 + i * 45}ms">${ic(s.icon, 'sm')}<span>${esc(s[S.lang] || s.en)}</span></button>`).join('')}</div>
       <div class="caps">
-        <span class="cap${folderName ? '' : ' off'}">${ic('folder')}${folderName ? t('cap_folder', { name: esc(folderName) }) : `${t('cap_no_folder')} <button id="capFolder">${t('connect')}</button>`}</span>
-        <span class="cap${internet !== 'off' && settingsOf().web_on ? '' : ' off'}">${ic('globe')}${internet === 'off' ? `${t('cap_no_web')} <button id="capWeb">${t('turn_on')}</button>` : settingsOf().web_on ? t('cap_web') : t('cap_web_ready')}</span>
-        <span class="cap">${ic('shield')}${t('cap_gate')}</span>
-      </div>
-      <div class="ideas stagger">${ideas.map(([icon, title, prompt]) => `
-        <button class="idea" data-prompt="${esc(t(prompt))}"><span class="ico">${ic(icon)}</span>
-        <span><b>${t(title)}</b><small dir="auto">${esc(t(prompt))}</small></span></button>`).join('')}</div>`;
+        <span class="cap${folderName ? '' : ' off'}">${ic('folder', 'sm')}${folderName ? t('cap_folder', { name: esc(folderName) }) : `${t('cap_no_folder')} <button id="capFolder">${t('connect')}</button>`}</span>
+        <span class="cap${internet !== 'off' && settingsOf().web_on ? '' : ' off'}">${ic('globe', 'sm')}${internet === 'off' ? `${t('cap_no_web')} <button id="capWeb">${t('turn_on')}</button>` : settingsOf().web_on ? t('cap_web') : t('cap_web_ready')}</span>
+        <span class="cap">${ic('shield', 'sm')}${t('cap_gate')}</span>
+      </div>`;
     const capFolder = $('#capFolder');
     if (capFolder) capFolder.onclick = pickFolder;
     const capWeb = $('#capWeb');
     if (capWeb) capWeb.onclick = () => { S.settingsTab = 'internet'; go('settings'); };
-    $$('.idea', empty).forEach(b => {
-      b.onclick = () => {
+    $$('.starter', empty).forEach(b => { b.onclick = () => openSheet(starters().find(s => s.id === b.dataset.s), b); });
+  }
+
+  /* A starter's sheet: its prompts, each a sentence whose blanks are inputs. Use puts the filled
+     prompt in the message box; Enter in its last blank does the same. */
+  function openSheet(starter, button) {
+    const sheet = $('#sheet');
+    if (!sheet || !starter) return;
+    if (!sheet.hidden && sheet.dataset.s === starter.id) { closeSheet(); return; }
+    $$('.starter').forEach(b => b.classList.toggle('on', b === button));
+    sheet.dataset.s = starter.id;
+    const prompts = starter.prompts[S.lang] || starter.prompts.en;
+    sheet.innerHTML = `<div class="sheet-head">${ic(starter.icon, 'sm')}<b>${esc(starter[S.lang] || starter.en)}</b>
+        <span class="hint">${t('sheet_hint')}</span><span class="grow"></span>
+        <button type="button" class="icon-btn" data-a="close" title="${t('cancel')}">${ic('x', 'sm')}</button></div>
+      <div class="sheet-list">${prompts.map((p, i) => `<div class="tpl" data-i="${i}" style="animation-delay:${i * 50}ms">
+        <div class="tpl-text" dir="auto">${templateHtml(p)}</div>
+        <button type="button" class="btn sm primary" data-a="use">${ic('send', 'sm')}${t('use_prompt')}</button></div>`).join('')}</div>`;
+    $('[data-a=close]', sheet).onclick = closeSheet;
+    $$('.tpl', sheet).forEach(tpl => {
+      const use = () => {
+        const blanks = $$('.blank', tpl);
+        const missing = blanks.find(b => !b.value.trim());
+        if (missing) { missing.classList.add('need'); missing.focus(); setTimeout(() => missing.classList.remove('need'), 900); return; }
+        const values = blanks.map(b => b.value.trim());
+        let n = 0;
+        const text = prompts[Number(tpl.dataset.i)].replace(/\{(\*?)([^}]+)\}/g, () => values[n++] || '');
         const input = $('#input');
-        input.value = b.dataset.prompt;
+        input.value = text;
         input.dispatchEvent(new Event('input'));
+        if (starter.web && !settingsOf().web_on && (S.status.internet || {}).mode !== 'off') setting({ web_on: true }, true);
+        closeSheet();
         input.focus();
       };
+      $('[data-a=use]', tpl).onclick = use;
+      $$('.blank', tpl).forEach((b, i, all) => {
+        const fit = () => { if (b.tagName === 'INPUT') b.style.width = Math.max(4, (b.value || b.placeholder).length + 1) + 'ch'; };
+        fit();
+        b.addEventListener('input', fit);
+        b.addEventListener('keydown', e => {
+          if (e.key === 'Enter' && !e.shiftKey && b.tagName === 'INPUT') {
+            e.preventDefault();
+            if (i < all.length - 1) all[i + 1].focus(); else use();
+          }
+        });
+      });
     });
+    sheet.hidden = false;
+    sheet.dataset.state = 'open';
+    // Opened on the next frame (so it slides); closed before that frame, it stays closed.
+    requestAnimationFrame(() => { if (sheet.dataset.state === 'open') sheet.classList.add('open'); });
+    const first = $('.blank', sheet);
+    if (first) setTimeout(() => first.focus(), 160);
+  }
+
+  function closeSheet() {
+    const sheet = $('#sheet');
+    if (!sheet || sheet.hidden) return;
+    sheet.dataset.state = 'closed';
+    sheet.classList.remove('open');
+    $$('.starter').forEach(b => b.classList.remove('on'));
+    setTimeout(() => { if (sheet.dataset.state === 'closed') sheet.hidden = true; }, 220);
+  }
+
+  function templateHtml(prompt) {
+    let out = '', at = 0;
+    for (const m of prompt.matchAll(/\{(\*?)([^}]+)\}/g)) {
+      out += esc(prompt.slice(at, m.index)).replace(/\n/g, '<br>');
+      out += m[1] ? `<textarea class="blank long" rows="2" dir="auto" placeholder="${esc(m[2])}"></textarea>`
+                  : `<input class="blank" dir="auto" placeholder="${esc(m[2])}">`;
+      at = m.index + m[0].length;
+    }
+    return out + esc(prompt.slice(at)).replace(/\n/g, '<br>');
   }
 
   /* ---- messages ------------------------------------------------------------------- */
@@ -842,13 +1066,19 @@
     if (!thread) return;
     thread.innerHTML = '';
     const messages = (S.chat && S.chat.messages) || [];
-    messages.forEach((m, i) => thread.appendChild(m.role === 'user' ? userEl(m) : botEl(m, i === messages.length - 1)));
+    messages.forEach((m, i) => thread.appendChild(
+      m.summary ? summaryEl(m) : m.role === 'user' ? userEl(m) : botEl(m, i === messages.length - 1)));
     if (S.run && S.run.chatId === S.chatId && S.chatId) {
       if (S.run.userEl && !S.run.userEl.isConnected && !messages.some(m => m.id === (S.run.user || {}).id)) thread.appendChild(S.run.userEl);
       thread.appendChild(S.run.live.el);
     }
     renderEmpty();
-    requestAnimationFrame(() => scrollDown(false));
+    paintContext();
+    // A chat opens at its end; the empty page at its greeting.
+    requestAnimationFrame(() => {
+      if (messages.length || S.run) scrollDown(true);
+      else if ($('#scroller')) $('#scroller').scrollTop = 0;
+    });
   }
 
   function userEl(m) {
@@ -857,9 +1087,19 @@
       ${files ? `<div class="files">${files}</div>` : ''}${m.plan ? `<span class="plan-tag">${ic('plan', 'sm')} ${t('plan_mode_tag')}</span>` : ''}</div></article>`);
   }
 
+  /** A compaction: the summary that stands in for the turns before it, folded. */
+  function summaryEl(m) {
+    const saved = Math.max(0, (m.before || 0) - (m.after || 0));
+    const node = h(`<article class="msg summary"><details><summary>${ic('layers', 'sm')}<span class="grow">${t('summary_title')}</span>
+      ${saved ? `<span class="saved">${t('saved_n', { n: num(saved) })}</span>` : ''}${ic('chev', 'sm chev')}</summary>
+      <div class="content" dir="auto"></div></details></article>`);
+    $('.content', node).innerHTML = window.MD.render(m.content || '');
+    return node;
+  }
+
   function botShell(name) {
     return h(`<article class="msg bot"><div class="bubble">
-      <div class="slot-think"></div><div class="slot-plan"></div><div class="steps"></div><div class="slot-check"></div><div class="content" dir="auto"></div><div class="slot-foot"></div>
+      <div class="slot-think"></div><div class="slot-plan"></div><div class="steps flow"></div><div class="slot-check"></div><div class="content" dir="auto"></div><div class="slot-foot"></div>
       <div class="meta"><span class="tag" dir="auto">${esc(name)}</span><span class="stats"></span><span class="sp"></span><span class="acts"></span></div></div></article>`);
   }
 
@@ -867,7 +1107,15 @@
     const el = botShell(m.model || '');
     if (m.think) $('.slot-think', el).appendChild(thinkEl(m.think, false, m));
     if (m.plan) $('.slot-plan', el).appendChild(planEl(m.plan, m.folder));
-    for (const step of m.steps || []) $('.steps', el).appendChild(stepFromRecord(step));
+    const steps = $('.steps', el);
+    const cards = (m.steps || []).map(stepFromRecord);
+    cards.forEach(card => steps.appendChild(card));
+    // The reasoning between the steps, each where it came (agent.Turn.thoughts).
+    for (const thought of (m.thoughts || []).filter(x => x.again)) {
+      const node = thinkEl(thought.text, false, null, 1);
+      const before = cards[thought.at];
+      if (before) steps.insertBefore(node, before); else steps.appendChild(node);
+    }
     const content = $('.content', el);
     content.innerHTML = window.MD.render(m.content || '');
     decorateCode(content);
@@ -875,11 +1123,13 @@
     return el;
   }
 
-  function thinkEl(text, open, meta) {
+  /** A block of reasoning; one after a step's result reads "thinking again". */
+  function thinkEl(text, open, meta, nth = 0) {
     const words = text.split(/\s+/).filter(Boolean).length;
-    const node = h(`<details class="think"${open ? ' open' : ''}><summary>${ic('brain', 'sm')}<span class="lbl">${t('reasoning_words', { n: num(words) })}</span>${ic('chev', 'sm chev')}</summary><div class="think-text" dir="auto"></div></details>`);
+    const node = h(`<details class="think${nth ? ' again' : ''}"${open ? ' open' : ''}><summary>${ic('brain', 'sm')}<span class="lbl"></span>${ic('chev', 'sm chev')}</summary><div class="think-text" dir="auto"></div></details>`);
+    $('.lbl', node).textContent = t(nth ? 'rethink_words' : 'reasoning_words', { n: num(words) });
     $('.think-text', node).textContent = text;
-    if (meta && meta.forced) $('.lbl', node).innerHTML += ` · <span class="over">${t('closed_at_ceiling')}</span>`;
+    if (meta && meta.forced && !nth) $('.lbl', node).innerHTML += ` · <span class="over">${t('closed_at_ceiling')}</span>`;
     return node;
   }
 
@@ -971,11 +1221,33 @@
     }
   }
 
+  /* Following the answer as it grows (web.js does the same): the reader's scroll up stops it, coming
+     back to the end starts it again -- not a distance measured on every piece, which lost the answer
+     when a code block grew it at once and pulled a reader back who had scrolled up a little. */
+  let follow = true, lastTop = 0;
+
+  function watchScroll(scroller) {
+    const stop = () => { if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 2) follow = false; };
+    scroller.addEventListener('wheel', e => { if (e.deltaY < 0) follow = false; }, { passive: true });
+    scroller.addEventListener('touchmove', stop, { passive: true });
+    scroller.addEventListener('keydown', e => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key)) follow = false; });
+    scroller.addEventListener('scroll', () => {
+      const away = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+      if (away < 24) follow = true;
+      else if (scroller.scrollTop < lastTop - 1) follow = false;
+      lastTop = scroller.scrollTop;
+      $('#jump').classList.toggle('on', away > 160);
+      $('#top').classList.toggle('scrolled', scroller.scrollTop > 4);
+    }, { passive: true });
+  }
+
   function scrollDown(force) {
     const scroller = $('#scroller');
     if (!scroller) return;
-    const near = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 220;
-    if (force || near) scroller.scrollTop = scroller.scrollHeight;
+    if (force) follow = true;
+    if (!follow) return;
+    scroller.scrollTop = scroller.scrollHeight;
+    lastTop = scroller.scrollTop;
   }
 
   /* ---- plans (3.0) ------------------------------------------------------------------- */
@@ -1121,7 +1393,7 @@
     content.classList.add('live');
     const reading = h(`<div class="reading"><span class="dots">${t('reading_prompt').replace(/…$/, '')}</span><span class="bar"><i></i></span><span class="pct"></span></div>`);
     $('.slot-think', el).before(reading);
-    let text = '', think = '', thinkNode = null, frame = 0, planNode = null, planData = null;
+    let text = '', think = '', thinkNode = null, againNode = null, frame = 0, planNode = null, planData = null;
     const steps = {};
     const paint = () => {
       frame = 0;
@@ -1142,10 +1414,24 @@
         $('.pct', reading).textContent = total ? `${num(done)} / ${num(total)}` : '';
         if (done >= total && total) $('.dots', reading).textContent = t('thinking').replace(/…$/, '');
       },
-      think(piece) {
+      think(piece, again) {
         hideReading();
+        if (again) {
+          // Thinking again after a step's result: its own block, among the steps, in order.
+          if (!againNode) {
+            againNode = thinkEl('', true, null, 1);
+            againNode.classList.add('live');
+            $('.steps', el).appendChild(againNode);
+          }
+          const box = $('.think-text', againNode);
+          box.textContent += piece;
+          box.scrollTop = box.scrollHeight;
+          $('.lbl', againNode).textContent = t('rethink_live', { n: num(box.textContent.split(/\s+/).filter(Boolean).length) });
+          scrollDown(false);
+          return;
+        }
         think += piece;
-        if (!thinkNode) { thinkNode = thinkEl('', true); $('.slot-think', el).appendChild(thinkNode); }
+        if (!thinkNode) { thinkNode = thinkEl('', true); thinkNode.classList.add('live'); $('.slot-think', el).appendChild(thinkNode); }
         const box = $('.think-text', thinkNode);
         box.textContent = think;
         box.scrollTop = box.scrollHeight;
@@ -1153,8 +1439,17 @@
         scrollDown(false);
       },
       thinkEnd(d) {
+        if (d.again) {
+          if (!againNode) return;
+          againNode.open = false;
+          againNode.classList.remove('live');
+          $('.lbl', againNode).textContent = t('rethink_words', { n: num(d.words || 0) });
+          againNode = null;
+          return;
+        }
         if (!thinkNode) return;
         thinkNode.open = false;
+        thinkNode.classList.remove('live');
         $('.lbl', thinkNode).innerHTML = esc(t('reasoning_words', { n: num(d.words || 0) }))
           + (d.target ? ' · ' + esc(t('target_words', { n: num(d.target) })) : '')
           + (d.forced ? ` · <span class="over">${t('closed_at_ceiling')}</span>` : '');
@@ -1356,6 +1651,13 @@
       return;
     }
     if (S.view !== 'chat') go('chat');
+    // Near the end of the model's context: the chat is compacted first, so the answer still fits.
+    const ctx = contextOf(S.chat);
+    if (S.chatId && S.chat && ctx.used / ctx.limit >= AUTO_COMPACT && (S.chat.messages || []).length >= 2) {
+      toast(t('auto_compact'), 'info', 3500);
+      await compact();
+      if (S.run) return;
+    }
     const plan = options.plan !== undefined ? options.plan : S.plan;
     const attachments = S.attachments.splice(0);
     paintAttachments();
@@ -1370,6 +1672,38 @@
     scrollDown(true);
     paintComposer();
     await stream({ chat_id: S.chatId, prompt: text, attachments, plan, resume: !!options.resume, web: !!settingsOf().web_on }, live);
+  }
+
+  /** Compacting the chat: the model summarises it (server.compact_turn), and from then on the summary
+      goes in place of the turns it covers -- the context glass drops, the tokens are saved. */
+  async function compact() {
+    if (S.run || !S.chatId || !S.chat || (S.chat.messages || []).length < 2) return;
+    const chat = S.chat;
+    const card = h(`<article class="msg summary working"><div class="sum-live"><span class="spinner"></span>${t('compacting')}</div></article>`);
+    $('#thread').appendChild(card);
+    scrollDown(true);
+    const ctrl = new AbortController();
+    S.run = { ctrl, live: { el: card }, runId: null, chatId: chat.id, userEl: null, user: null, compacting: true };
+    paintComposer();
+    let saved = null, problem = '';
+    try {
+      await sse('/local/chat', { chat_id: chat.id, compact: true }, (event, d) => {
+        if (event === 'run') S.run.runId = d.run_id;
+        else if (event === 'error') problem = d.detail || 'error';
+        else if (event === 'done') saved = d.message;
+      }, ctrl.signal);
+      if (problem || !saved) throw new Error(problem || t('model_failed'));
+      chat.messages.push(saved);
+      card.replaceWith(summaryEl(saved));
+      toast(t('compacted', { n: num(Math.max(0, (saved.before || 0) - (saved.after || 0))) }), 'ok', 3500);
+    } catch (e) {
+      card.remove();
+      if (e.name !== 'AbortError') fail(e);
+    } finally {
+      S.run = null;
+      paintComposer();
+      loadChats();
+    }
   }
 
   async function answerAgain(node) {
@@ -1401,7 +1735,7 @@
             loadChats();
             break;
           case 'progress': live.progress(d.done, d.total); break;
-          case 'think': live.think(d.text); break;
+          case 'think': live.think(d.text, d.again); break;
           case 'think_end': live.thinkEnd(d); break;
           case 'planning': live.planning(d); break;
           case 'plan': live.plan(d); break;
@@ -2053,13 +2387,13 @@
 
   function renderSettings() {
     const view = $('#view-settings');
-    const sections = [['internet', 'globe'], ['agent', 'shield'], ['model', 'cpu'], ['skills', 'sparkle'], ['look', 'sun'], ['about', 'info']];
+    const sections = [['internet', 'globe'], ['agent', 'shield'], ['model', 'cpu'], ['online', 'link'], ['skills', 'sparkle'], ['look', 'sun'], ['about', 'info']];
     view.innerHTML = `<div class="page scroll" id="settingsPage"><div class="page-in">
       <h1>${t('settings_title')}</h1><p class="lead">${t('settings_lead')}</p>
       <div class="settings-layout"><nav class="snav">${sections.map(([id, icon]) => `<button data-s="${id}">${ic(icon, 'sm')}${t('s_' + id)}</button>`).join('')}</nav>
       <div>${sections.map(([id]) => `<section class="card sgroup" id="s-${id}"></section>`).join('')}</div></div></div></div>`;
     $$('.snav button', view).forEach(b => { b.onclick = () => { S.settingsTab = b.dataset.s; paintSnav(); $('#s-' + b.dataset.s).scrollIntoView({ behavior: 'smooth', block: 'start' }); }; });
-    paintInternet(); paintAgent(); paintModelSettings(); paintSkills(); paintLook(); paintAbout();
+    paintInternet(); paintAgent(); paintModelSettings(); paintOnline(); paintSkills(); paintLook(); paintAbout();
     paintSnav();
     setTimeout(() => { const target = $('#s-' + S.settingsTab); if (target) target.scrollIntoView({ block: 'start' }); }, 30);
     $('#settingsPage').addEventListener('scroll', () => {
@@ -2183,6 +2517,110 @@
     box.appendChild(srow(t('workspace'), t('workspace_p'), where));
   }
 
+  /* Online models: a key for a service, the models put in the picker, the one in use. */
+  function paintOnline() {
+    const box = $('#s-online');
+    if (!box) return;
+    const data = S.status.online || { providers: [], active: {}, base: '' };
+    const act = data.active || {};
+    const current = (data.providers || []).find(p => p.id === act.provider);
+    box.innerHTML = `<h2>${ic('link')}${t('s_online')}</h2><p>${t('online_lead')}</p>`;
+    const now = h(`<div class="online-now">${ic(current ? 'globe' : 'cube', 'sm')}<span class="grow">${current
+      ? t('online_using', { model: `<b class="ltr">${esc(act.model)}</b>`, name: esc(current.name) }) : t('online_local')}</span></div>`);
+    if (current) {
+      const back = h(`<button class="btn sm">${ic('cube', 'sm')}${t('use_local')}</button>`);
+      back.onclick = async () => { await setting({ online: { active: { provider: '', model: '' } } }, true); paintStatus(null); paintComposer(); paintOnline(); };
+      now.appendChild(back);
+    }
+    box.appendChild(now);
+    for (const p of data.providers || []) {
+      const card = h(`<div class="online-card${p.id === act.provider ? ' on' : ''}">
+        <div class="oc-head"><b>${esc(p.name)}</b>${p.id === 'ahoosai' ? `<span class="badge acc">${t('ours')}</span>` : ''}
+          ${p.key ? `<span class="badge ok">${t('key_set')} · <span class="ltr">${esc(p.key)}</span></span>` : ''}<span class="grow"></span>
+          ${p.site ? `<a class="btn sm ghost" href="${esc(p.site)}">${ic('external', 'sm')}${t('get_key')}</a>` : ''}</div>
+        ${p.id === 'ahoosai' ? `<p class="muted oc-note">${t('online_ours_note')}</p>` : ''}
+        ${p.id === 'custom' ? `<label class="field"><span>${t('c_url')}</span><input class="input mono" dir="ltr" data-f="base"
+          value="${esc(data.base || '')}" placeholder="https://example.com/v1"></label>` : ''}
+        <div class="with-btn"><input class="input mono" type="password" dir="ltr" autocomplete="off" data-f="key"
+          placeholder="${p.key ? t('replace_key') : esc(p.hint || t('paste_key'))}">
+          <button class="btn primary" data-a="save">${t('save')}</button>
+          ${p.key ? `<button class="btn ghost danger" data-a="forget" title="${t('remove')}">${ic('trash', 'sm')}</button>` : ''}</div>
+        <div class="oc-models"></div>
+        ${p.key ? `<div class="oc-acts"><button class="btn sm" data-a="list">${ic('list', 'sm')}${t('online_fetch')}</button>
+          <input class="input mono" dir="ltr" data-f="model" placeholder="${t('online_model_ph')}">
+          <button class="btn sm" data-a="add">${ic('plus', 'sm')}${t('online_add')}</button></div><div class="oc-found"></div>` : ''}
+      </div>`);
+      const models = $('.oc-models', card);
+      const putModels = async list => {
+        await setting({ online: { models: { [p.id]: list } } }, true);
+        paintOnline();
+      };
+      for (const model of p.models || []) {
+        const on = p.id === act.provider && model === act.model;
+        const chip = h(`<span class="file-chip oc-model${on ? ' on' : ''}"><span class="ltr">${esc(model)}</span>
+          ${p.key ? `<button type="button" data-a="use" title="${t('online_use')}">${on ? ic('check', 'sm') : ic('play', 'sm')}</button>` : ''}
+          <button type="button" data-a="drop" title="${t('remove')}">${ic('x', 'sm')}</button></span>`);
+        const use = $('[data-a=use]', chip);
+        if (use) use.onclick = () => useOnline(p, model);
+        $('[data-a=drop]', chip).onclick = () => putModels((p.models || []).filter(m => m !== model));
+        models.appendChild(chip);
+      }
+      $('[data-a=save]', card).onclick = async () => {
+        const key = $('[data-f=key]', card).value.trim();
+        const patch = { keys: {} };
+        if (key) patch.keys[p.id] = key;
+        const base = $('[data-f=base]', card);
+        if (base) patch.base = base.value.trim();
+        if (!key && !base) { $('[data-f=key]', card).focus(); return; }
+        await setting({ online: patch });
+        paintOnline();
+      };
+      const forget = $('[data-a=forget]', card);
+      if (forget) forget.onclick = async () => {
+        const sure = await modal({ title: t('online_forget_q', { name: p.name }), ok: t('remove'), danger: true });
+        if (!sure) return;
+        const patch = { keys: { [p.id]: '' } };
+        if (act.provider === p.id) patch.active = { provider: '', model: '' };
+        await setting({ online: patch }, true);
+        paintStatus(null);
+        paintOnline();
+      };
+      const add = $('[data-a=add]', card);
+      if (add) add.onclick = () => {
+        const field = $('[data-f=model]', card);
+        const model = field.value.trim();
+        if (!model) { field.focus(); return; }
+        putModels([...new Set([...(p.models || []), model])]);
+      };
+      const listBtn = $('[data-a=list]', card);
+      if (listBtn) listBtn.onclick = async () => {
+        listBtn.disabled = true;
+        listBtn.innerHTML = `<span class="spinner"></span>${t('testing')}`;
+        const found = await api('/local/online/models', { provider: p.id }).catch(e => ({ ok: false, error: String(e.message || e) }));
+        listBtn.disabled = false;
+        listBtn.innerHTML = ic('list', 'sm') + t('online_fetch');
+        const out = $('.oc-found', card);
+        if (!found.ok) { out.innerHTML = `<div class="test-result bad">${ic('alert', 'sm')} ${esc(found.error || '')}</div>`; return; }
+        out.innerHTML = `<div class="test-result ok">${ic('check', 'sm')} ${t('online_found', { n: num(found.models.length), s: num(found.seconds, 1) })}</div>
+          <input class="input" dir="ltr" placeholder="${t('online_filter')}" data-f="filter"><div class="oc-list"></div>`;
+        const list = $('.oc-list', out);
+        const draw = q => {
+          list.innerHTML = '';
+          for (const id of found.models.filter(m => !q || m.toLowerCase().includes(q.toLowerCase())).slice(0, 80)) {
+            const picked = (p.models || []).includes(id);
+            const b = h(`<button type="button" class="file-chip oc-pick${picked ? ' on' : ''}"><span class="ltr">${esc(id)}</span>${ic(picked ? 'check' : 'plus', 'sm')}</button>`);
+            b.onclick = () => putModels(picked ? (p.models || []).filter(m => m !== id) : [...(p.models || []), id]);
+            list.appendChild(b);
+          }
+        };
+        draw('');
+        $('[data-f=filter]', out).oninput = e => draw(e.target.value);
+      };
+      box.appendChild(card);
+    }
+    box.appendChild(h(`<p class="muted oc-note">${ic('info', 'sm')} ${t('online_chat_only')}</p>`));
+  }
+
   function paintModelSettings() {
     const box = $('#s-model');
     const st = settingsOf();
@@ -2198,6 +2636,9 @@
     box.appendChild(srow(t('threads'), t('threads_p', { n: num(S.status.machine.cpus) }), threads));
     box.appendChild(srow(t('gpu'), t('gpu_p') + (S.status.gpu ? ' ' + esc(t('gpu_now', { what: S.status.gpu })) : ''),
       seg([['auto', t('gpu_auto')], ['off', t('gpu_off')]], st.gpu || 'auto', v => setting({ gpu: v }).then(() => toast(t('restarting'), 'info')))));
+    const placed = S.status.placement || '';
+    box.appendChild(srow(t('srun_title'), t('srun_p'), switcher(st.srun !== false, v => setting({ srun: v }).then(() => toast(t('restarting'), 'info')))));
+    if (placed) box.appendChild(h(`<pre class="srun-plan" dir="ltr">${esc(placed)}</pre>`));
     const gpu = h(`<input class="input" type="number" min="0" max="999" value="${st.gpu_layers || 0}" style="width:90px">`);
     gpu.onchange = () => setting({ gpu_layers: Number(gpu.value) }).then(() => toast(t('restarting'), 'info'));
     box.appendChild(srow(t('gpu_layers'), t('gpu_layers_p'), gpu));

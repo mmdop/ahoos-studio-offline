@@ -382,12 +382,12 @@ HELP = f"""
 
 def do_login(config: dict) -> dict:
     print(rule("sign in"))
-    print(DIM("  Create a key at https://ahoos-ai.site/nimbus/platforme/"))
-    url = input(f"  server [{config.get('url', 'https://ahoos-ai.site/nimbus')}]: ").strip()
+    print(DIM("  Create a key at https://ahoos-ai.site/services/platforme/"))
+    url = input(f"  server [{config.get('url', 'https://ahoos-ai.site/services')}]: ").strip()
     key = input("  key: ").strip()
     if url:
         config["url"] = url
-    config.setdefault("url", "https://ahoos-ai.site/nimbus")
+    config.setdefault("url", "https://ahoos-ai.site/services")
     if key:
         config["key"] = key
     save_config(config)

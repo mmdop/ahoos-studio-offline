@@ -67,6 +67,7 @@ from typing import Any, Callable
 from . import __version__, checks, writer
 from . import tools as T
 from .engine import Cancelled, EngineError, Llama, Sampling, dial_sampling
+from .today import FORMAT, timely, today_text
 
 DECISION_TOKENS = 600            # a tool and short arguments
 PLAN_TOKENS = 1600               # a decision that is a plan
@@ -227,10 +228,10 @@ def unprefix(plan: Plan, folder: str) -> None:
 def environment(profile: Profile, folder: Path | None, web_label: str, tools: list[T.Tool], *, files: bool,
                 workspace: Path | None, unfinished: Plan | None = None, plan_only: bool = False) -> str:
     """Where the model is, what it can do, and how it works."""
-    today = datetime.now().strftime("%A %d %B %Y")
     lines = ["", "# Where you are",
              f"You are {profile.name}, running on the user's own computer ({os_name()}) inside AhoosAI Studio "
-             f"{__version__}. Nothing you do leaves this computer unless the internet is on. Today is {today}."]
+             f"{__version__}. Nothing you do leaves this computer unless the internet is on."
+             + " " + today_text(local=True).strip()]
     if folder:
         lines.append(f"Project folder: {folder} -- every path you write is relative to it: `index.html`, not "
                      f"`{folder.name}/index.html`. Commands run in it ({shell_name()}).")
@@ -242,8 +243,11 @@ def environment(profile: Profile, folder: Path | None, web_label: str, tools: li
     else:
         lines.append("No folder is connected, so you cannot see or change the user's files. If they ask you to, "
                      "tell them to connect one with the folder button at the top of the window.")
-    lines.append(f"Internet: on (via {web_label}). Search when a question needs current or outside facts."
+    lines.append(f"Internet: on (via {web_label}). Your own knowledge stops in 2025: news, prices, rates, scores, "
+                 "weather, releases and anything about today or this year are checked with web_search first, every "
+                 "time; then read the best pages with fetch_url and answer naming the sources."
                  if web_label else "Internet: off. You cannot look things up; say so when a question needs it.")
+    lines += ["", FORMAT]
     if not files and not tools:
         return "\n".join(lines)
     lines += ["", "# How you work",
@@ -390,6 +394,7 @@ class Turn:
         self.checkpoint = None
         self.waited = 0.0                # time spent waiting for the person, kept out of the timings
         self.think = ""
+        self.thoughts: list[dict] = []   # each block of reasoning and where it came: {at: len(steps), text, again}
         self.tokens = 0
         self.gen_seconds = 0.0
         self.actions = 0
@@ -550,7 +555,16 @@ class Turn:
     def messages(self, sent: str) -> list[dict]:
         messages = [{"role": "system", "content": self.system_prompt()}]
         keep = int(self.settings.get("memory", 6))
-        past = self.history[-keep * 2:] if keep else []
+        # A compacted chat: its summary stands in for every turn before it.
+        history, summary = self.history, None
+        for index, message in enumerate(self.history):
+            if message.get("summary"):
+                history, summary = self.history[index + 1:], message
+        if summary is not None:
+            messages += [{"role": "user", "content": "Summary of our conversation so far, in place of the earlier "
+                                                     "messages:\n\n" + summary.get("content", "")},
+                         {"role": "assistant", "content": "Understood."}]
+        past = history[-keep * 2:] if keep else []
         for message in past:
             if message.get("role") == "user":
                 messages.append({"role": "user", "content": message.get("sent") or message.get("content", "")})
@@ -671,20 +685,33 @@ class Turn:
                 self.transcript[index] = {"role": "user", "content": message["content"][:600] + "\n… (cut)"}
         self.emit("compacted", {})
 
-    def _think(self, prompt: str) -> str:
-        """Apex's reasoning, up to the level's ceiling."""
+    def _think(self, prompt: str, again: bool = False) -> str:
+        """Apex's reasoning, up to the level's ceiling. `again`: thinking after a step's result --
+        what it showed and what comes next -- on a third of the budget (the online engine's way)."""
         said: list[str] = []
         limit = self.controls.think_token_limit(self.request)
-        for piece in self._stream(prompt + "<think>\n", n_predict=limit, stop=["</think>", "<|im_end|>"]):
+        if again:
+            limit = min(400, max(48, limit // 3))
+        for piece in self._stream(prompt + "<think>\n", n_predict=self._room(prompt, limit),
+                                  stop=["</think>", "<|im_end|>"]):
             said.append(piece)
-            self.emit("think", {"text": piece})
+            self.emit("think", {"text": piece, "again": again})
         reasoning = "".join(said).strip()
         from nimbus2.controls import reasoning_words
 
-        self.emit("think_end", {"words": len(reasoning.split()), "forced": self._limited(),
-                                "target": reasoning_words(self.controls.thinking_level)})
-        self.think = reasoning
+        self.emit("think_end", {"words": len(reasoning.split()), "forced": self._limited() and not again,
+                                "target": reasoning_words(self.controls.thinking_level), "again": again})
+        if reasoning:
+            self.thoughts.append({"at": len(self.steps), "text": reasoning, "again": again})
+        if not again:
+            self.think = reasoning
         return reasoning
+
+    def _think_again(self) -> str:
+        """The prefix of the next decision after a tool's result: a short block of reasoning on it."""
+        if not self.apex:
+            return self._prefix()
+        return "<think>\n" + self._think(self.render(self.transcript), again=True) + "\n</think>\n\n"
 
     def _decide(self, schema: dict, call_id: str, prefix: str = "", n_predict: int = DECISION_TOKENS
                 ) -> tuple[str, dict] | None:
@@ -970,12 +997,19 @@ class Turn:
         read = [t for t in self.tools if t.name in T.READ_ONLY]
         seen: dict[str, int] = {}
         for step in range(LOOK_STEPS + 1):
-            prefix = self._prefix()
-            if self.apex and step == 0:
-                prefix = "<think>\n" + self._think(self.render(self.transcript)) + "\n</think>\n\n"
             if step == LOOK_STEPS:
                 return "reply"
+            prefix = self._prefix()
+            if self.apex:
+                # Thinking first, and again after every file read or search: what it showed, and
+                # what to do next.
+                prefix = ("<think>\n" + self._think(self.render(self.transcript)) + "\n</think>\n\n"
+                          if step == 0 else self._think_again())
             schema = T.decision_schema(read, plan=self.files_on, resume=self.unfinished is not None)
+            searcher = next((t for t in read if t.name == "web_search"), None)
+            if step == 0 and searcher is not None and timely(self.request):
+                # A question about now: the first step is a search, whatever the model would have chosen.
+                schema = T.decision_schema([searcher], reply=False)
             call_id = uuid.uuid4().hex[:8]
             self._tick()
             decided = self._decide(schema, call_id, prefix,
@@ -1063,13 +1097,16 @@ class Turn:
         tools = [t for t in self.tools if t.name in allowed]
         seen: dict[str, int] = {}
         ok = True
+        looked = False                   # a command's or a search's result is waiting to be thought about
         for _ in range(limit):
             if self.actions >= self.max_actions:
                 self.ran_out = True
                 return False
             call_id = uuid.uuid4().hex[:8]
             self._tick()
-            decided = self._decide(T.decision_schema(tools, step_done=True, reply=False), call_id)
+            prefix = self._think_again() if looked else ""
+            looked = False
+            decided = self._decide(T.decision_schema(tools, step_done=True, reply=False), call_id, prefix)
             if decided is None:
                 return ok
             name, args = decided
@@ -1106,6 +1143,7 @@ class Turn:
             self._record(call_id, name, args, result, status)
             ok = ok and status != "refused"
             self._tool_said(result.text)
+            looked = True
         return ok
 
     def _build(self) -> None:
@@ -1233,8 +1271,16 @@ class Turn:
                              "tps": round(self.tokens / self.gen_seconds, 2) if self.gen_seconds else 0}}
         if self.think:
             message["think"] = self.think
+        if len(self.thoughts) > 1:
+            message["thoughts"] = self.thoughts          # the reasoning between the steps, in order
         if self.steps:
             message["steps"] = self.steps
+        try:
+            # How full the model's context is after this turn: the context meter's figure.
+            used = self._count(self.render(self.transcript)) + (self._count(answer) if answer else 0)
+            message["context"] = {"used": int(used), "limit": int(self._context())}
+        except Exception:  # noqa: BLE001 - a figure for the page, never a reason to lose the turn
+            pass
         if self.plan is not None:
             message["plan"] = self.plan.to_dict()
             message["turn"] = self.id
@@ -1302,6 +1348,18 @@ class Turn:
         if not self.ran_out:
             self._check()
         return self._finish()
+
+    SUMMARISE = ("Summarise our conversation so far for yourself, so it can continue from the summary alone. Keep: "
+                 "the user's goals and preferences, decisions made, facts and numbers established, names of files, "
+                 "functions and commands, code that matters (briefly), and what is still open. Leave out pleasantries "
+                 "and repetition. Write it in the language of the conversation, as compact notes.")
+
+    def summarise(self) -> str:
+        """Compacting the chat: the conversation (all of it since the last summary) folded into notes the
+        model writes for itself, streamed as the answer. No tools, no reasoning: notes, not a turn."""
+        self.transcript = self.messages(self.SUMMARISE)
+        prompt = self.render(self.transcript) + self._prefix()
+        return self._reply(prompt, SUMMARY_TOKENS * 3).strip()
 
     def _plan_reply(self) -> str:
         lines = [self.plan.goal, ""]

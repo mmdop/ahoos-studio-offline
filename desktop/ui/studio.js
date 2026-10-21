@@ -17,6 +17,8 @@
   const ic = (name, cls = '') => `<svg class="i ${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
   const h = html => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  // The agents' mark: three circles, as the chat draws a crew.
+  const AGENTS_IC = '<svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="15" r="3.2"/><circle cx="12" cy="8" r="3.2"/><circle cx="18" cy="15" r="3.2"/></svg>';
   const store = {
     get: k => { try { return localStorage.getItem('ahoos.' + k); } catch (e) { return null; } },
     set: (k, v) => { try { localStorage.setItem('ahoos.' + k, v); } catch (e) { /* private mode */ } },
@@ -26,6 +28,8 @@
     status: null, lang: 'fa', view: 'chat',
     chats: [], chatId: null, chat: null, search: '',
     run: null, attachments: [], plan: false,
+    // Agent mode stays on until another mode is chosen.
+    agents: store.get('agents') === 'on',
     chips: [],
     battles: [], score: null, battle: null, battleRun: null,
     hub: { model: null, adapter: null, sel: { model: '', adapter: '' }, busy: {} },
@@ -660,8 +664,9 @@
             <button type="button" class="tool tools-btn" id="toolsBtn" title="${t('tools_title')}">${ic('sliders', 'sm')}<span class="dot" id="toolsDot"></span></button>
             <div class="mode" id="modeSeg" role="radiogroup" aria-label="${t('mode_title')}">
               <span class="thumb"></span>
-              <button type="button" role="radio" data-m="normal">${t('mode_normal')}</button>
-              <button type="button" role="radio" data-m="plan">${ic('plan', 'sm')}${t('mode_plan')}</button>
+              <button type="button" role="radio" data-m="normal" title="${t('mode_normal')}" aria-label="${t('mode_normal')}">${ic('chat', 'sm')}<span class="lbl">${t('mode_normal')}</span></button>
+              <button type="button" role="radio" data-m="plan" title="${t('mode_plan')}" aria-label="${t('mode_plan')}">${ic('plan', 'sm')}<span class="lbl">${t('mode_plan')}</span></button>
+              <button type="button" role="radio" data-m="agents" title="${t('mode_agents')}" aria-label="${t('mode_agents')}">${AGENTS_IC}<span class="lbl">${t('mode_agents')}</span></button>
             </div>
             <button type="button" class="tool web-btn" id="webBtn" title="${t('web_chip_title')}">${ic('globe', 'sm')}</button>
             <span class="grow"></span>
@@ -718,19 +723,22 @@
   function paintMode() {
     const seg = $('#modeSeg');
     if (!seg) return;
+    const current = S.plan ? 'plan' : S.agents ? 'agents' : 'normal';
     $$('button', seg).forEach(b => {
-      const on = (b.dataset.m === 'plan') === S.plan;
+      const on = b.dataset.m === current;
       b.classList.toggle('on', on);
       b.setAttribute('aria-checked', on);
     });
     seg.classList.toggle('plan', S.plan);
+    seg.classList.toggle('agents', current === 'agents');
     requestAnimationFrame(() => {
       const on = $('button.on', seg);
       const thumb = $('.thumb', seg);
       if (on && thumb) { thumb.style.left = on.offsetLeft + 'px'; thumb.style.width = on.offsetWidth + 'px'; }
     });
     $('#composer').classList.toggle('planning', S.plan);
-    $('#input').placeholder = S.plan ? t('placeholder_plan') : t('placeholder');
+    $('#composer').classList.toggle('agenting', current === 'agents');
+    $('#input').placeholder = S.plan ? t('placeholder_plan') : current === 'agents' ? t('placeholder_agents') : t('placeholder');
   }
 
   function setSending(on) {
@@ -862,8 +870,10 @@
     $$('#modeSeg button').forEach(b => {
       b.onclick = () => {
         S.plan = b.dataset.m === 'plan';
+        S.agents = b.dataset.m === 'agents';
+        store.set('agents', S.agents ? 'on' : 'off');
         paintMode();
-        toast(S.plan ? t('plan_on_toast') : t('plan_off_toast'), 'info', 1800);
+        toast(S.plan ? t('plan_on_toast') : S.agents ? t('agents_on_toast') : t('plan_off_toast'), 'info', 1800);
       };
     });
     $('#webBtn').onclick = () => $('#webChip').click();
@@ -1304,6 +1314,7 @@
   function toolTitle(name, args, state, meta) {
     args = args || {};
     meta = meta || {};
+    if (name === 'spawn_agents') return t(state === 'done' ? 't_crew_done' : 't_crew_run', { n: num((meta.agents || args.agents || []).length) });
     const path = `<code>${esc(args.path || '.')}</code>`;
     const map = {
       list_files: ['t_list_run', 't_list_done'], read_file: ['t_read_run', 't_read_done'],
@@ -1329,10 +1340,44 @@
     return '';
   }
 
+  // The agents' colours, in crew.py's order: for a crew drawn before its first event.
+  const AGENT_HEX = ['#E5484D', '#F76B15', '#FFC53D', '#30A46C', '#0090FF', '#8E4EC6'];
+  function agentDot(a) {
+    return `<span class="agent-dot" style="--c:${esc(/^#[0-9a-f]{6}$/i.test(a.hex || '') ? a.hex : '#8B8D98')}"></span>`;
+  }
+  function agentStatus(a) {
+    if (a.status === 'done') return t('agent_done', { s: num(a.seconds || 0, 1) });
+    if (a.status === 'error') return t('agent_failed');
+    return a.status === 'wait' ? t('agent_wait') : t('agent_running');
+  }
+  /** A crew's row of circles and its cards, from its agents' records (or the call's own list). */
+  function paintCrew(node, agents) {
+    const crew = (agents || []).map((a, n) => ({ status: 'wait', hex: AGENT_HEX[n % AGENT_HEX.length], ...a }));
+    $('.crew', node).innerHTML = crew.map(a => `<span class="agent-chip" data-status="${esc(a.status)}" title="${esc(a.task || '')}">
+      ${agentDot(a)}<b dir="ltr">${esc(a.name || '')}</b></span>`).join('');
+    const inner = $('.step-inner', node);
+    inner.innerHTML = '';
+    for (const a of crew) {
+      const card = h(`<div class="agent-card" data-status="${esc(a.status)}">
+        <div class="who">${agentDot(a)}<b dir="ltr">${esc(a.name || '')}</b><span class="st">${esc(agentStatus(a))}</span></div>
+        <div class="task" dir="auto"><span>${t('agent_task')}:</span> ${esc(a.task || '')}</div></div>`);
+      const did = (a.steps || []).map(x => x.tool === 'web_search' ? t('agent_search', { query: esc(x.query || '') })
+        : t('agent_read', { host: esc(host(x.url || '')) }));
+      if (did.length) card.appendChild(h(`<ul class="did">${did.map(x => `<li dir="auto">${x}</li>`).join('')}</ul>`));
+      if (a.result) {
+        const report = h('<div class="report" dir="auto"></div>');
+        report.innerHTML = window.MD.render(a.result);
+        card.appendChild(report);
+      }
+      inner.appendChild(card);
+    }
+  }
   function stepEl(id, name) {
-    const node = h(`<div class="step" data-id="${esc(id)}" data-status="running">
-      <button class="step-head" type="button"><span class="step-ico">${ic(TOOL_ICON[name] || 'bolt', 'sm')}</span>
+    const crew = name === 'spawn_agents';
+    const node = h(`<div class="step${crew ? ' crew-step' : ''}" data-id="${esc(id)}" data-status="running">
+      <button class="step-head" type="button"><span class="step-ico">${crew ? AGENTS_IC : ic(TOOL_ICON[name] || 'bolt', 'sm')}</span>
         <span class="step-title">${toolTitle(name, {}, 'running')}</span><span class="step-sub"></span>${ic('chev', 'sm chev')}</button>
+      ${crew ? '<div class="crew"></div>' : ''}
       <div class="step-body"><div class="step-inner"></div></div></div>`);
     $('.step-head', node).onclick = () => node.classList.toggle('open');
     node.dataset.name = name;
@@ -1381,6 +1426,11 @@
     node.dataset.status = step.status === 'done' ? 'done' : step.status;
     $('.step-title', node).innerHTML = toolTitle(step.name, step.args, step.status === 'done' ? 'done' : 'run', step.meta);
     $('.step-sub', node).textContent = toolSub(step);
+    if (step.name === 'spawn_agents') {
+      $('.step-ico', node).innerHTML = AGENTS_IC;
+      paintCrew(node, (step.meta || {}).agents || (step.args || {}).agents);
+      return node;
+    }
     $('.step-inner', node).appendChild(stepBody(step));
     return node;
   }
@@ -1395,6 +1445,7 @@
     $('.slot-think', el).before(reading);
     let text = '', think = '', thinkNode = null, againNode = null, frame = 0, planNode = null, planData = null;
     const steps = {};
+    let crewId = null;                               // the crew at work: the agents' events paint it
     const paint = () => {
       frame = 0;
       content.innerHTML = window.MD.render(text);
@@ -1523,10 +1574,25 @@
           pre.scrollTop = pre.scrollHeight;
         }
       },
+      /** An agent's progress: its circle and card in the crew at work. */
+      agent(d) {
+        hideReading();
+        const s = crewId && step(crewId);
+        if (!s) return;
+        s.agents = s.agents || {};
+        const was = s.agents[d.id] || {};
+        s.agents[d.id] = { ...was, ...d, steps: d.step ? [...(was.steps || []), d.step] : (d.steps || was.steps || []) };
+        paintCrew(s.node, Object.values(s.agents));
+        scrollDown(false);
+      },
       toolCall(d) {
         if (!steps[d.id]) this.toolStart(d);
         const s = step(d.id);
         Object.assign(s.args, d.args || {});
+        if (s.name === 'spawn_agents') {
+          crewId = d.id;
+          if (!s.agents) paintCrew(s.node, s.args.agents || []);
+        }
         $('.step-title', s.node).innerHTML = toolTitle(s.name, s.args, 'running');
         const pre = $('pre.live', s.node);
         if (pre) pre.classList.remove('live');
@@ -1611,6 +1677,11 @@
         s.node.dataset.status = d.status === 'done' ? 'done' : d.status;
         $('.step-title', s.node).innerHTML = toolTitle(d.name, d.args, d.status === 'done' ? 'done' : 'run', d.meta);
         $('.step-sub', s.node).textContent = toolSub(d);
+        if (d.name === 'spawn_agents') {
+          $('.step-ico', s.node).innerHTML = AGENTS_IC;
+          paintCrew(s.node, (d.meta || {}).agents || Object.values(s.agents || {}));
+          return;
+        }
         const inner = $('.step-inner', s.node);
         inner.innerHTML = '';
         inner.appendChild(stepBody(d));
@@ -1671,7 +1742,8 @@
     renderEmpty();
     scrollDown(true);
     paintComposer();
-    await stream({ chat_id: S.chatId, prompt: text, attachments, plan, resume: !!options.resume, web: !!settingsOf().web_on }, live);
+    await stream({ chat_id: S.chatId, prompt: text, attachments, plan, agents: !plan && !!S.agents && !options.resume,
+                   resume: !!options.resume, web: !!settingsOf().web_on }, live);
   }
 
   /** Compacting the chat: the model summarises it (server.compact_turn), and from then on the summary
@@ -1749,6 +1821,7 @@
           case 'ask': live.ask(d); break;
           case 'asked': live.asked(d); break;
           case 'tool_result': live.toolResult(d); break;
+          case 'agent': live.agent(d); break;
           case 'delta': live.delta(d.text); break;
           case 'reply_reset': live.reset(d.text); break;
           case 'error': live.error(d.detail); break;

@@ -238,7 +238,7 @@ class Web:
             if not link:
                 continue
             snippet = re.search(r"<p[^>]*>(.*?)</p>", block, re.S)
-            results.append({"title": link.group(2), "url": html.unescape(link.group(1)),
+            results.append({"title": link.group(2), "url": bing_target(html.unescape(link.group(1))),
                             "snippet": snippet.group(1) if snippet else ""})
         return results
 
@@ -274,6 +274,23 @@ class Web:
         found = self.search("AhoosAI Studio", 3)
         return {"ok": True, "results": len(found), "seconds": round(time.monotonic() - started, 1),
                 "via": self.label(), "first": found[0] if found else None}
+
+
+def bing_target(url: str) -> str:
+    """The page a Bing result leads to. Bing's own page sends its links through bing.com/ck/a, the
+    address in its `u` parameter: "a1" and the address in URL-safe base64."""
+    if "bing.com/ck/a" not in url:
+        return url
+    import base64
+    u = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("u", [""])[0]
+    if u.startswith("a1"):
+        try:
+            target = base64.urlsafe_b64decode(u[2:] + "=" * (-len(u[2:]) % 4)).decode("utf-8")
+            if target.startswith(("http://", "https://")):
+                return target
+        except (ValueError, UnicodeDecodeError):
+            pass
+    return url
 
 
 def refuse_local(host: str) -> None:

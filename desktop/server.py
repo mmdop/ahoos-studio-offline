@@ -267,6 +267,7 @@ def build(controller: "Controller") -> FastAPI:
         cancel = threading.Event()
         controller.runs[run_id] = cancel
         plan = bool(body.get("plan"))
+        agents = bool(body.get("agents")) and not plan
 
         def work(emit, cancel_flag) -> None:
             try:
@@ -315,7 +316,7 @@ def build(controller: "Controller") -> FastAPI:
                 if user is None:
                     sent = runner.sent_text(attachments)
                     user = controller.chats.append(chat["id"], {
-                        "role": "user", "content": prompt, "sent": sent, "plan": plan,
+                        "role": "user", "content": prompt, "sent": sent, "plan": plan, "agents": agents,
                         "attachments": [{"name": a["name"], "chars": len(a["text"])} for a in attachments]})
                 else:
                     sent = user.get("sent") or user["content"]
@@ -323,7 +324,18 @@ def build(controller: "Controller") -> FastAPI:
                              "title": controller.chats.get(chat["id"]).get("title", ""),
                              "profile": runner.profile.name, "folder": str(folder or ""),
                              "tools": [t.name for t in runner.tools]})
+                crew = None
+                if agents or (user is not None and user.get("agents") and retry):
+                    # Agent mode: the agents work on the parts of the message first, at the same time, and the
+                    # model answers from their reports (crew.py).
+                    from .crew import Crew
+
+                    crew, notes = Crew(llama=llama, web=web, emit=emit, cancel=cancel_flag).run(sent)
+                    runner.chips = (runner.chips + "\n\n" if runner.chips else "") + notes
                 message = runner.run(sent)
+                if crew is not None:
+                    message["steps"] = [crew] + list(message.get("steps") or [])
+                    message["agents"] = True
                 saved = controller.chats.append(chat["id"], message)
                 emit("done", {"message": saved})
             finally:

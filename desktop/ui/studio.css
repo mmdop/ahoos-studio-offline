@@ -914,3 +914,42 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16p
 .oc-pick { cursor: pointer; }
 .srun-plan { margin: 0 0 8px; padding: 10px 12px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--line);
   font-family: var(--mono); font-size: 11.8px; line-height: 1.6; white-space: pre-wrap; color: var(--ink-2); text-align: left; }
+
+/* ---- agents: their mode, and a crew as a row of coloured circles with two white eyes ----------- */
+.mode.agents .thumb { background: var(--accent-soft); }
+.mode.agents button.on { color: var(--accent-ink); }
+.composer.agenting { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.mode svg.i circle, .step-ico svg.i circle { fill: currentColor; stroke: none; }
+/* The modes: an icon each; the chosen one says its name too. */
+.mode button { padding: 0 9px; }
+.mode button:not(.on) .lbl { display: none; }
+.mode button .i { display: inline-block !important; }
+.crew { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 2px 12px 12px; }
+.agent-chip { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
+.agent-chip b { font-weight: 600; }
+.agent-dot { position: relative; flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--c); }
+.agent-dot::before, .agent-dot::after { content: ""; position: absolute; top: 34%; width: 22%; height: 30%; border-radius: 50%; background: #fff; }
+.agent-dot::before { inset-inline-start: 24%; }
+.agent-dot::after { inset-inline-end: 24%; }
+.agent-card .agent-dot { width: 22px; height: 22px; }
+.agent-chip[data-status="wait"] .agent-dot { opacity: .45; }
+.agent-chip[data-status="running"] .agent-dot, .agent-chip[data-status="working"] .agent-dot { animation: agent-pulse 1.4s ease-out infinite; }
+.agent-chip[data-status="running"] .agent-dot::before, .agent-chip[data-status="running"] .agent-dot::after,
+.agent-chip[data-status="working"] .agent-dot::before, .agent-chip[data-status="working"] .agent-dot::after { animation: agent-blink 3.2s infinite; }
+.agent-chip[data-status="error"] .agent-dot, .agent-card[data-status="error"] .agent-dot { background: transparent; box-shadow: inset 0 0 0 2px var(--c); }
+.agent-chip[data-status="error"] .agent-dot::before, .agent-chip[data-status="error"] .agent-dot::after,
+.agent-card[data-status="error"] .agent-dot::before, .agent-card[data-status="error"] .agent-dot::after { background: var(--c); }
+@keyframes agent-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 55%, transparent); } 100% { box-shadow: 0 0 0 8px transparent; } }
+@keyframes agent-blink { 0%, 92%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.15); } }
+.agent-card { display: grid; gap: 5px; padding: 10px 14px; border-top: 1px solid var(--line); }
+.agent-card .who { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.agent-card .who b { font-weight: 600; }
+.agent-card .st { margin-inline-start: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.agent-card .task { color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+.agent-card .task span { color: var(--ink-2); font-weight: 560; }
+.agent-card .did { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 12px; color: var(--muted); }
+.agent-card .did li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-card .report { font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.agent-card .report > :first-child { margin-top: 0; }
+.agent-card .report > :last-child { margin-bottom: 0; }
+@media (prefers-reduced-motion: reduce) { .agent-dot, .agent-dot::before, .agent-dot::after { animation: none !important; } }

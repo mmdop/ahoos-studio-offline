@@ -31,7 +31,7 @@ jobs:
             label: windows-x64
           - os: ubuntu-22.04
             label: linux-x64
-          - os: macos-14
+          - os: macos-15
             label: macos-arm64
           # Intel Macs: the last Intel image GitHub offers.
           - os: macos-15-intel

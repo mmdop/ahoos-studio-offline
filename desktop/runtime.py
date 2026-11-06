@@ -75,6 +75,15 @@ POLL = 0.4
 # had the problem, smaller blocks cost nothing. A tensor bigger than a block
 # still gets a buffer of its own.
 VULKAN_ENV = {"GGML_VK_SUBALLOCATION_BLOCK_SIZE": str(512 * 1024 * 1024)}
+# CUDA builds: llama.cpp's releases carry many cards' kernels as PTX, compiled on first use. On the online
+# engine (a T4) that made the model load in 53 s and the first answer read 5.8 tokens a second; kept, the
+# compiled kernels made the next start 7 s. Here they are kept in the studio's own folder, with room enough.
+CUDA_CACHE_MAXSIZE = str(4 * 1024 ** 3)
+
+
+def cuda_cache() -> Path:
+    from .paths import data_dir
+    return data_dir() / "cuda-cache"
 
 
 def find_binary(bundled: Path | None = None) -> Path:
@@ -212,6 +221,12 @@ class ModelServer:
         env = dict(os.environ)
         for name, value in VULKAN_ENV.items():
             env.setdefault(name, value)     # a value the person set themselves wins
+        try:
+            cuda_cache().mkdir(parents=True, exist_ok=True)
+            env.setdefault("CUDA_CACHE_PATH", str(cuda_cache()))
+            env.setdefault("CUDA_CACHE_MAXSIZE", CUDA_CACHE_MAXSIZE)
+        except OSError:
+            pass                            # no cache: slower first start, nothing worse
         self.process = subprocess.Popen(
             self.command(),
             stdout=subprocess.PIPE,
@@ -253,6 +268,7 @@ class ModelServer:
                 with urllib.request.urlopen(url, timeout=3) as response:
                     if response.status == 200:
                         self.gpu_note = offload_note(list(self.log))
+                        self.warm_up()
                         return
             except urllib.error.HTTPError as exc:
                 if exc.code == 503:            # loading: the answer we are waiting for
@@ -266,6 +282,19 @@ class ModelServer:
         raise RuntimeError_(
             f"the model did not finish loading within {int(timeout)} seconds.\n" + self.tail(12)
         )
+
+    def warm_up(self, timeout: float = 120.0) -> None:
+        """A short answer before the person's first: what the card builds on first use (CUDA kernels,
+        Vulkan pipelines) is built now, while the studio still says it is loading."""
+        prompt = "Count the words in this sentence, then say hello. " * 8
+        body = json.dumps({"prompt": prompt, "n_predict": 4, "cache_prompt": False}).encode("utf-8")
+        request = urllib.request.Request(f"http://127.0.0.1:{self.port}/completion", data=body,
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                response.read()
+        except Exception:                   # a warm-up that fails costs the first answer some time, nothing more
+            pass
 
     def alive(self) -> bool:
         return bool(self.process) and self.process.poll() is None

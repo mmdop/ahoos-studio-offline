@@ -368,6 +368,23 @@
     if (!list) return;
     const q = S.search.trim().toLowerCase();
     const rows = S.chats.filter(c => !q || (c.title || '').toLowerCase().includes(q));
+    if (q.length >= 3) {
+      clearTimeout(paintChats.timer);
+      paintChats.timer = setTimeout(async () => {
+        const found = await searchMessages(q);
+        if (S.search.trim().toLowerCase() !== q || !found.length) return;
+        const box = $('#chatList');
+        if (!box) return;
+        const empty = $('.side-empty', box);
+        if (empty) empty.remove();
+        box.appendChild(h(`<div class="group-h">${t('pal_msgs')}</div>`));
+        found.forEach(m => {
+          const row = h(`<div class="row found-row" role="button" tabindex="0"><span class="ttl" dir="auto"><b>${esc(m.title || t('untitled'))}</b><small dir="auto">${esc(m.snippet)}</small></span></div>`);
+          row.onclick = () => openMessage(m.chat_id, m.id);
+          box.appendChild(row);
+        });
+      }, 300);
+    }
     if (!rows.length) {
       list.innerHTML = `<div class="side-empty">${q ? t('no_matches') : t('no_chats')}</div>`;
       return;
@@ -771,7 +788,7 @@
     if (!button) return;
     const ctx = contextOf(S.chat);
     const share = Math.max(0, Math.min(1, ctx.used / ctx.limit));
-    $('#ctxWater').style.transform = `translateY(${(1 - share) * 26 + 1}px)`;
+    fillGlass($('#ctxWater'), (1 - share) * 26 + 1);
     button.classList.toggle('warn', share >= 0.7 && share < 0.88);
     button.classList.toggle('bad', share >= 0.88);
     button.classList.toggle('idle', ctx.used === 0);
@@ -841,10 +858,21 @@
     const input = $('#input');
     const form = $('#composer');
     const grow = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 240) + 'px'; };
-    input.addEventListener('input', () => { grow(); form.classList.toggle('typed', !!input.value.trim()); });
+    input.addEventListener('input', () => { grow(); form.classList.toggle('typed', !!input.value.trim()); slashMenu(input); });
     input.addEventListener('focus', () => form.classList.add('focus'));
     input.addEventListener('blur', () => form.classList.remove('focus'));
     input.addEventListener('keydown', e => {
+      const pop = $('#slashPop');
+      if (pop) {                                         // the slash list is open: it takes the keys
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          pop._at = (pop._at + (e.key === 'ArrowDown' ? 1 : pop._items.length - 1)) % pop._items.length;
+          slashMenu(input);
+          return;
+        }
+        if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); runSlash(input, pop._items[pop._at]); return; }
+        if (e.key === 'Escape') { pop.remove(); return; }
+      }
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
     });
     form.addEventListener('submit', e => {
@@ -883,6 +911,7 @@
 
   function addFiles(files) {
     for (const file of files.slice(0, 6)) {
+      if (isPdf(file) || isWord(file)) { addDocument(file); continue; }
       if (file.size > 400000) { toast(t('file_too_big', { name: file.name }), 'bad'); continue; }
       if (/^(image|video|audio)\//.test(file.type)) { toast(t('file_not_text', { name: file.name }), 'bad'); continue; }
       const reader = new FileReader();
@@ -1076,8 +1105,11 @@
     if (!thread) return;
     thread.innerHTML = '';
     const messages = (S.chat && S.chat.messages) || [];
-    messages.forEach((m, i) => thread.appendChild(
-      m.summary ? summaryEl(m) : m.role === 'user' ? userEl(m) : botEl(m, i === messages.length - 1)));
+    messages.forEach((m, i) => {
+      const el = m.summary ? summaryEl(m) : m.role === 'user' ? userEl(m) : botEl(m, i === messages.length - 1);
+      if (m.id) el.dataset.mid = m.id;
+      thread.appendChild(el);
+    });
     if (S.run && S.run.chatId === S.chatId && S.chatId) {
       if (S.run.userEl && !S.run.userEl.isConnected && !messages.some(m => m.id === (S.run.user || {}).id)) thread.appendChild(S.run.userEl);
       thread.appendChild(S.run.live.el);
@@ -1093,8 +1125,10 @@
 
   function userEl(m) {
     const files = (m.attachments || []).map(a => `<span class="file-chip">${ic('file', 'sm')}<span dir="auto">${esc(a.name)}</span></span>`).join('');
-    return h(`<article class="msg user"><div class="col"><div class="bubble" dir="auto">${esc(m.content)}</div>
+    const node = h(`<article class="msg user"><div class="col"><div class="bubble" dir="auto">${esc(m.content)}</div>
       ${files ? `<div class="files">${files}</div>` : ''}${m.plan ? `<span class="plan-tag">${ic('plan', 'sm')} ${t('plan_mode_tag')}</span>` : ''}</div></article>`);
+    $('.col', node).appendChild(userActs(node, m));
+    return node;
   }
 
   /** A compaction: the summary that stands in for the turns before it, folded. */
@@ -1191,10 +1225,15 @@
     $('.meta .stats', el).textContent = stats.seconds ? t('stats', { s: num(stats.seconds, 1), n: num(stats.tokens), tps: num(stats.tps, 1) }) : '';
     const metaActs = $('.meta .acts', el);
     metaActs.innerHTML = `<button data-a="copy">${ic('copy', 'sm')}${t('copy')}</button>`
+      + (window.speechSynthesis && m.content ? `<button data-a="speak">${SPEAK_IC}${t('read_aloud')}</button>` : '')
       + (last ? `<button data-a="retry">${ic('refresh', 'sm')}${t('answer_again')}</button>` : '');
     $('[data-a="copy"]', metaActs).onclick = e => copy(m.content || '', e.currentTarget);
+    const speak = $('[data-a="speak"]', metaActs);
+    if (speak) speak.onclick = e => readAloud(m.content || '', e.currentTarget);
     const retry = $('[data-a="retry"]', metaActs);
     if (retry) retry.onclick = () => answerAgain(el);
+    const versions = answerPager(el, m);
+    if (versions) metaActs.prepend(versions);
   }
 
   function decorateCode(root) {
@@ -1202,6 +1241,9 @@
       const [copyBtn, saveBtn] = $$('.code-acts button', block);
       if (copyBtn && !copyBtn.innerHTML) copyBtn.innerHTML = ic('copy', 'sm') + t('copy');
       if (saveBtn && !saveBtn.innerHTML) saveBtn.innerHTML = ic('save', 'sm') + (S.status && S.status.folder ? t('save_to_folder') : t('save_as'));
+      if (runnable(block) && !$('[data-act="run"]', block)) {
+        $('.code-acts', block).prepend(h(`<button type="button" data-act="run" class="run">${PLAY_IC}${t('run_code')}</button>`));
+      }
     });
   }
 
@@ -1211,6 +1253,7 @@
     const block = button.closest('.code');
     const code = $('code', block).innerText;
     if (button.dataset.act === 'copy') { copy(code, button); return; }
+    if (button.dataset.act === 'run') { openPreview(code); return; }
     const guess = block.dataset.file || ('snippet.' + ({ python: 'py', javascript: 'js', typescript: 'ts', bash: 'sh', html: 'html', css: 'css', json: 'json' }[block.dataset.lang] || 'txt'));
     if (S.status.folder) {
       const path = await ask(t('save_in_folder_q'), guess);
@@ -1437,23 +1480,52 @@
 
   /* ---- a live turn --------------------------------------------------------------- */
 
+  // The model at work: a small cloud, raining (studio.css .rain) -- Nimbus is a rain cloud.
+  const RAIN = '<span class="rain" aria-hidden="true"><svg viewBox="0 0 30 18"><path d="M8.2 17.5h14.6a5.6 5.6 0 0 0 .9-11.1'
+    + 'A7.6 7.6 0 0 0 9.3 4.9 6.3 6.3 0 0 0 8.2 17.5z"/></svg><i></i><i></i><i></i></span>';
+
+  /** The context glass's water to a new level, in a smooth step drawn frame by frame (a CSS transition on
+      the group froze the wave for about a second each time; seen in the online studio 2026-11-09). */
+  function fillGlass(node, y) {
+    if (!node) return;
+    const from = node._y ?? y;
+    if (node._anim) cancelAnimationFrame(node._anim);
+    if (Math.abs(from - y) < 0.05 || document.documentElement.dataset.motion === 'reduced') {
+      node._y = y;
+      node.setAttribute('transform', `translate(0 ${y})`);
+      return;
+    }
+    const begun = performance.now(), span = 650;
+    const step = now => {
+      const k = Math.min(1, (now - begun) / span);
+      node._y = from + (y - from) * (1 - Math.pow(1 - k, 3));
+      node.setAttribute('transform', `translate(0 ${node._y.toFixed(2)})`);
+      node._anim = k < 1 ? requestAnimationFrame(step) : 0;
+    };
+    node._anim = requestAnimationFrame(step);
+  }
+
   function liveBot(name) {
     const el = botShell(name);
     const content = $('.content', el);
     content.classList.add('live');
-    const reading = h(`<div class="reading"><span class="dots">${t('reading_prompt').replace(/…$/, '')}</span><span class="bar"><i></i></span><span class="pct"></span></div>`);
+    const reading = h(`<div class="reading">${RAIN}<span class="dots">${t('reading_prompt').replace(/…$/, '')}</span><span class="bar"><i></i></span><span class="pct"></span></div>`);
     $('.slot-think', el).before(reading);
     let text = '', think = '', thinkNode = null, againNode = null, frame = 0, planNode = null, planData = null;
     const steps = {};
     let crewId = null;                               // the crew at work: the agents' events paint it
+    // While the model writes, a smaller cloud rains under its words (in place of a caret).
+    const tail = h(`<div class="rain-tail">${RAIN.replace('class="rain"', 'class="rain sm"')}</div>`);
     const paint = () => {
       frame = 0;
       content.innerHTML = window.MD.render(text);
       decorateCode(content);
+      if (!tail.isConnected) content.after(tail);
       scrollDown(false);
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(paint); };
     const hideReading = () => { if (reading.isConnected) reading.remove(); };
+    const hideTail = () => { if (tail.isConnected) tail.remove(); };
     const step = id => steps[id];
     return {
       el,
@@ -1692,10 +1764,12 @@
       reset(value) { text = value || ''; schedule(); },
       error(detail) {
         hideReading();
+        hideTail();
         $('.slot-foot', el).appendChild(h(`<div class="note bad">${ic('alert', 'sm')} ${esc(detail)}</div>`));
       },
       done(message) {
         hideReading();
+        hideTail();
         if (frame) { cancelAnimationFrame(frame); frame = 0; }
         content.classList.remove('live');
         text = message.content || '';
@@ -1706,6 +1780,7 @@
       },
       finish() {
         hideReading();
+        hideTail();
         content.classList.remove('live');
         $$('.step[data-status="running"],.step[data-status="asking"]', el).forEach(n => { n.dataset.status = 'error'; });
       },
@@ -1735,15 +1810,20 @@
     const user = { role: 'user', content: text, attachments: attachments.map(a => ({ name: a.name })), plan };
     const userNode = userEl(user);
     const live = liveBot(S.status.profile.name);
+    // Sent: the message flies up, the answer's box unfolds under it, the composer gives a small push.
+    userNode.classList.add('fresh');
+    live.el.classList.add('fresh');
+    const box = $('#composer');
+    if (box) { box.classList.remove('sent'); void box.offsetWidth; box.classList.add('sent'); }
     $('#thread').appendChild(userNode);
     $('#thread').appendChild(live.el);
     if (plan && options.plan === undefined) { S.plan = false; }
-    S.run = { ctrl: new AbortController(), live, runId: null, chatId: S.chatId, userEl: userNode, user: null };
+    S.run = { ctrl: new AbortController(), live, runId: null, chatId: S.chatId, userEl: userNode, user: null, asked: user };
     renderEmpty();
     scrollDown(true);
     paintComposer();
     await stream({ chat_id: S.chatId, prompt: text, attachments, plan, agents: !plan && !!S.agents && !options.resume,
-                   resume: !!options.resume, web: !!settingsOf().web_on }, live);
+                   resume: !!options.resume, web: !!settingsOf().web_on, branches: options.branches || null }, live);
   }
 
   /** Compacting the chat: the model summarises it (server.compact_turn), and from then on the summary
@@ -1803,7 +1883,17 @@
               run.chatId = d.chat_id;
               if (!S.chatId) { S.chatId = d.chat_id; S.chat = { id: d.chat_id, title: d.title, messages: [] }; }
             }
-            if (S.chat && S.chat.id === run.chatId && d.user && !S.chat.messages.some(m => m.id === d.user.id)) S.chat.messages.push(d.user);
+            // The message on screen becomes the saved one (its id: what editing it needs).
+            if (run.asked && d.user) {
+              Object.assign(run.asked, d.user);
+              // An edited question: drawn again, with its branches' arrows.
+              if (d.user.branches && run.userEl && run.userEl.isConnected) {
+                const fresh = userEl(run.asked);
+                run.userEl.replaceWith(fresh);
+                run.userEl = fresh;
+              }
+            }
+            if (S.chat && S.chat.id === run.chatId && d.user && !S.chat.messages.some(m => m.id === d.user.id)) S.chat.messages.push(run.asked || d.user);
             loadChats();
             break;
           case 'progress': live.progress(d.done, d.total); break;
@@ -1871,6 +1961,307 @@
     paintThread();
     paintComposer();
     setTimeout(() => $('#input') && $('#input').focus(), 30);
+  }
+
+
+  /* ==== 2026-11-10: as the online studio -- an answer's versions and an edited question's branches (kept in
+     the chat's file, chats.py), a page run beside the chat, PDF and Word, the command palette (Ctrl+K) and
+     slash commands, search in the messages, an answer read aloud (this computer's own voices). ============ */
+
+  Object.assign(window.I18N, {
+    edit_msg: { fa: 'ویرایش', en: 'Edit' },
+    edit_send: { fa: 'فرستادن', en: 'Send' },
+    edit_cancel: { fa: 'انصراف', en: 'Cancel' },
+    wait_run: { fa: 'صبر کنید پاسخ تمام شود', en: 'Wait for the answer to finish' },
+    version_n: { fa: 'نسخه‌ی {k} از {n}', en: 'Version {k} of {n}' },
+    run_code: { fa: 'اجرا', en: 'Run' },
+    preview_title: { fa: 'پیش‌نمایش', en: 'Preview' },
+    preview_reload: { fa: 'دوباره', en: 'Reload' },
+    palette_ph: { fa: 'گفتگو، پیام یا فرمان را جستجو کنید…', en: 'Search chats, messages or commands…' },
+    pal_actions: { fa: 'فرمان‌ها', en: 'Commands' },
+    pal_chats: { fa: 'گفتگوها', en: 'Chats' },
+    pal_msgs: { fa: 'در پیام‌ها', en: 'In messages' },
+    pal_none: { fa: 'چیزی پیدا نشد', en: 'Nothing found' },
+    pal_hint: { fa: '↑↓ برای رفتن · Enter برای باز کردن · Esc برای بستن', en: '↑↓ to move · Enter to open · Esc to close' },
+    slash_hint: { fa: 'فرمان‌ها', en: 'Commands' },
+    cmd_new: { fa: 'گفتگوی تازه', en: 'New chat' },
+    cmd_settings: { fa: 'تنظیمات', en: 'Settings' },
+    cmd_models: { fa: 'مدل‌ها', en: 'Models' },
+    cmd_theme: { fa: 'عوض کردن تم', en: 'Switch theme' },
+    cmd_normal: { fa: 'حالت عادی', en: 'Normal mode' },
+    cmd_plan: { fa: 'حالت برنامه', en: 'Plan mode' },
+    cmd_agents: { fa: 'ایجنت‌ها', en: 'Agents' },
+    cmd_web: { fa: 'روشن/خاموش کردن وب', en: 'Web on/off' },
+    cmd_terminal: { fa: 'ترمینال', en: 'Terminal' },
+    read_aloud: { fa: 'بخوان', en: 'Read aloud' },
+    doc_reading: { fa: 'در حال خواندن {name}…', en: 'Reading {name}…' },
+    doc_failed: { fa: '{name} خوانده نشد', en: 'Could not read {name}' },
+    doc_empty: { fa: 'در {name} متنی پیدا نشد (شاید تصویر اسکن‌شده است)', en: 'No text found in {name} (perhaps a scanned image)' },
+  });
+
+  const SPEAK_IC = '<svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>';
+  const PLAY_IC = '<svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7z"/></svg>';
+
+  /* ---- versions and branches ---------------------------------------------------------------------------- */
+  function pager(at, n, on) {
+    const node = h(`<span class="pager" dir="ltr" title="${esc(t('version_n', { k: num(at + 1), n: num(n) }))}">
+      <button type="button" data-p="-1" ${at <= 0 ? 'disabled' : ''}>${ic('chev', 'sm')}</button><span>${num(at + 1)} / ${num(n)}</span>
+      <button type="button" data-p="1" ${at >= n - 1 ? 'disabled' : ''}>${ic('chev', 'sm')}</button></span>`);
+    $$('button', node).forEach(b => {
+      b.onclick = e => {
+        e.stopPropagation();
+        if (S.run) { toast(t('wait_run'), 'info', 2500); return; }
+        const j = at + Number(b.dataset.p);
+        if (j >= 0 && j < n) on(j);
+      };
+    });
+    return node;
+  }
+  function answerPager(el, m) {
+    if (!m.id || (m.versions || []).length < 2) return null;
+    return pager(m.at || 0, m.versions.length, async j => {
+      try {
+        const next = await api(`/local/chats/${S.chatId}/version`, { message_id: m.id, at: j });
+        const messages = S.chat.messages;
+        const i = messages.indexOf(m);
+        if (i < 0) return;
+        messages[i] = next;
+        el.replaceWith(botEl(next, i === messages.length - 1));
+        paintContext();
+      } catch (e) { fail(e); }
+    });
+  }
+  function userActs(node, m) {
+    const acts = h(`<div class="u-acts"></div>`);
+    if (m.id && (m.branches || []).length > 1) {
+      acts.appendChild(pager(m.at || 0, m.branches.length, async j => {
+        try { S.chat = await api(`/local/chats/${S.chatId}/branch`, { message_id: m.id, at: j }); paintThread(); } catch (e) { fail(e); }
+      }));
+    }
+    const edit = h(`<button type="button" class="u-edit" title="${esc(t('edit_msg'))}">${ic('pencil', 'sm')}</button>`);
+    edit.onclick = () => startEdit(node, m);
+    acts.appendChild(edit);
+    return acts;
+  }
+  function startEdit(node, m) {
+    if (S.run) { toast(t('wait_run'), 'info', 2500); return; }
+    if (!m.id || !S.chatId || node.classList.contains('editing')) return;
+    node.classList.add('editing');
+    const box = h(`<form class="edit-box"><textarea dir="auto" rows="3"></textarea>
+      <div class="edit-row"><button type="button" class="btn sm" data-x="cancel">${t('edit_cancel')}</button>
+      <button type="submit" class="btn primary sm">${ic('send', 'sm')}${t('edit_send')}</button></div></form>`);
+    const area = $('textarea', box);
+    area.value = m.content || '';
+    const col = $('.col', node);
+    const old = [...col.children];
+    old.forEach(c => { c.hidden = true; });
+    col.appendChild(box);
+    const grow = () => { area.style.height = 'auto'; area.style.height = Math.min(area.scrollHeight, 320) + 'px'; };
+    area.oninput = grow;
+    requestAnimationFrame(() => { grow(); area.focus(); });
+    const close = () => { box.remove(); old.forEach(c => { c.hidden = false; }); node.classList.remove('editing'); };
+    $('[data-x="cancel"]', box).onclick = close;
+    area.onkeydown = e => {
+      if (e.key === 'Escape') { e.preventDefault(); close(); }
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); box.requestSubmit(); }
+    };
+    box.onsubmit = async e => {
+      e.preventDefault();
+      const text = area.value.trim();
+      if (!text || text === (m.content || '').trim()) { close(); return; }
+      try {
+        const cut = await api(`/local/chats/${S.chatId}/edit`, { message_id: m.id });
+        const i = S.chat.messages.indexOf(m);
+        if (i >= 0) S.chat.messages.splice(i);
+        paintThread();
+        send(text, { branches: cut.branches || [] });
+      } catch (err) { fail(err); close(); }
+    };
+  }
+
+  /* ---- a page the model wrote, run beside the chat -------------------------------------------------------- */
+  const RUNNABLE = /^(html|htm|svg|xhtml)$/i;
+  function runnable(block) {
+    const code = ($('code', block) || {}).innerText || '';
+    return RUNNABLE.test(block.dataset.lang || '') || /^\s*(<!doctype html|<html|<svg)/i.test(code);
+  }
+  function openPreview(code) {
+    let panel = $('#preview');
+    if (!panel) {
+      panel = h(`<aside class="preview" id="preview" aria-label="${t('preview_title')}">
+        <div class="preview-head">${PLAY_IC}<b>${t('preview_title')}</b><span class="grow"></span>
+          <button class="icon-btn" data-a="reload" title="${t('preview_reload')}">${ic('refresh', 'sm')}</button>
+          <button class="icon-btn" data-a="close" title="${t('cancel')}">${ic('x', 'sm')}</button></div>
+        <iframe sandbox="allow-scripts allow-modals allow-forms" referrerpolicy="no-referrer"></iframe></aside>`);
+      document.body.appendChild(panel);
+      $('[data-a=close]', panel).onclick = () => { panel.classList.remove('on'); setTimeout(() => panel.remove(), 300); };
+      $('[data-a=reload]', panel).onclick = () => { $('iframe', panel).srcdoc = panel._code; };
+    }
+    panel._code = code;
+    $('iframe', panel).srcdoc = code;
+    requestAnimationFrame(() => panel.classList.add('on'));
+  }
+
+  /* ---- PDF and Word (read here; the readers come from a CDN the first time, so this needs the internet) ---- */
+  const PDFJS = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/';
+  const MAMMOTH = 'https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js';
+  let pdfjs = null;
+  async function pdfText(file) {
+    if (!pdfjs) {
+      pdfjs = await import(PDFJS + 'pdf.min.mjs');
+      pdfjs.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.mjs';
+    }
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+    const pages = [];
+    for (let n = 1; n <= Math.min(doc.numPages, 300); n++) {
+      const content = await (await doc.getPage(n)).getTextContent();
+      pages.push(content.items.map(i => i.str + (i.hasEOL ? '\n' : ' ')).join(''));
+      if (pages.join('\n').length > 120000) break;
+    }
+    return pages.map((p, i) => `[page ${i + 1}]\n${p.trim()}`).join('\n\n');
+  }
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src; s.onload = resolve; s.onerror = () => reject(new Error('could not load ' + src));
+      document.head.appendChild(s);
+    });
+  }
+  async function wordText(file) {
+    if (!window.mammoth) await loadScript(MAMMOTH);
+    return (await window.mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() })).value || '';
+  }
+  const isPdf = f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+  const isWord = f => /officedocument\.wordprocessingml/.test(f.type) || /\.docx$/i.test(f.name);
+  async function addDocument(file) {
+    if (file.size > 25 * 1024 * 1024) { toast(t('file_too_big', { name: file.name }), 'bad'); return; }
+    toast(t('doc_reading', { name: file.name }), 'info', 2500);
+    try {
+      const text = (isPdf(file) ? await pdfText(file) : await wordText(file)).replace(/[ \t]+\n/g, '\n').trim();
+      if (!text) { toast(t('doc_empty', { name: file.name }), 'bad'); return; }
+      S.attachments.push({ name: file.name, text: text.slice(0, 60000) });
+      paintAttachments();
+    } catch (e) {
+      toast(t('doc_failed', { name: file.name }) + ' (' + String(e.message || e).slice(0, 80) + ')', 'bad');
+    }
+  }
+
+  /* ---- reading an answer aloud: this computer's own voices ------------------------------------------------ */
+  let speaking = null;
+  function readAloud(text, button) {
+    if (!window.speechSynthesis) return;
+    if (speaking) { speechSynthesis.cancel(); const was = speaking; speaking = null; was.classList.remove('on'); if (was === button) return; }
+    const plain = text.replace(/```[\s\S]*?```/g, ' ').replace(/[#*_`>|]/g, ' ').replace(/\[(.*?)\]\(.*?\)/g, '$1');
+    const u = new SpeechSynthesisUtterance(plain.slice(0, 8000));
+    u.lang = /[؀-ۿ]/.test(plain) ? 'fa-IR' : 'en-US';
+    const voice = speechSynthesis.getVoices().find(v => v.lang && v.lang.toLowerCase().startsWith(u.lang.slice(0, 2)));
+    if (voice) u.voice = voice;
+    u.onend = u.onerror = () => { button.classList.remove('on'); speaking = null; };
+    speaking = button;
+    button.classList.add('on');
+    speechSynthesis.speak(u);
+  }
+
+  /* ---- search in the messages ------------------------------------------------------------------------------ */
+  async function searchMessages(q) {
+    if (q.trim().length < 3) return [];
+    try { return await api('/local/search?q=' + encodeURIComponent(q.trim())); } catch (e) { return []; }
+  }
+  async function openMessage(chatId, messageId) {
+    await openChat(chatId);
+    requestAnimationFrame(() => {
+      const el = $(`#thread [data-mid="${messageId}"]`);
+      if (!el) return;
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      el.classList.add('found');
+      setTimeout(() => el.classList.remove('found'), 2400);
+    });
+  }
+
+  /* ---- commands: the palette (Ctrl+K) and slash commands ------------------------------------------------------ */
+  function commands() {
+    const mode = m => () => { const b = $(`#modeSeg [data-m="${m}"]`); if (b) b.click(); };
+    return [
+      { label: t('cmd_new'), icon: 'plus', slash: ['new', 'تازه'], run: () => newChat() },
+      { label: t('cmd_settings'), icon: 'sliders', run: () => go('settings') },
+      { label: t('cmd_models'), icon: 'cube', run: () => go('models') },
+      { label: t('cmd_theme'), icon: 'sun', run: () => $('#themeBtn') && $('#themeBtn').click() },
+      { label: t('cmd_normal'), icon: 'chat', slash: ['normal', 'عادی'], run: mode('normal') },
+      { label: t('cmd_plan'), icon: 'plan', slash: ['plan', 'برنامه'], run: mode('plan') },
+      { label: t('cmd_agents'), icon: 'layers', slash: ['agents', 'ایجنت'], run: mode('agents') },
+      { label: t('cmd_web'), icon: 'globe', slash: ['web', 'وب'], run: () => $('#webBtn') && $('#webBtn').click() },
+    ];
+  }
+  function openPalette() {
+    if ($('#palette')) return;
+    const node = h(`<div class="palette-scrim" id="palette"><div class="palette" role="dialog">
+      <label class="palette-in">${ic('search', 'sm')}<input placeholder="${t('palette_ph')}" dir="auto"></label>
+      <div class="palette-list" role="listbox"></div><div class="palette-foot">${t('pal_hint')}</div></div></div>`);
+    document.body.appendChild(node);
+    const input = $('input', node), list = $('.palette-list', node);
+    let items = [], at = 0, seq = 0;
+    const close = () => node.remove();
+    node.addEventListener('mousedown', e => { if (e.target === node) close(); });
+    const paint = () => {
+      list.innerHTML = '';
+      let group = '';
+      items.forEach((it, i) => {
+        if (it.group !== group) { group = it.group; list.appendChild(h(`<div class="pal-group">${esc(group)}</div>`)); }
+        const row = h(`<button class="pal-item${i === at ? ' on' : ''}" role="option">${ic(it.icon || 'chat', 'sm')}<span class="grow" dir="auto"><b>${esc(it.label)}</b>${it.sub ? `<small dir="auto">${esc(it.sub)}</small>` : ''}</span></button>`);
+        row.onmouseenter = () => { at = i; $$('.pal-item', list).forEach((r, j) => r.classList.toggle('on', j === at)); };
+        row.onclick = () => { close(); it.run(); };
+        list.appendChild(row);
+      });
+      if (!items.length) list.appendChild(h(`<div class="pal-none">${t('pal_none')}</div>`));
+      const on = $('.pal-item.on', list);
+      if (on) on.scrollIntoView({ block: 'nearest' });
+    };
+    const fill = async () => {
+      const q = input.value.trim().toLowerCase(), mine = ++seq;
+      const cmds = commands().filter(c => !q || c.label.toLowerCase().includes(q)).map(c => ({ ...c, group: t('pal_actions') }));
+      const chats = (S.chats || []).filter(c => !q || (c.title || '').toLowerCase().includes(q)).slice(0, 8)
+        .map(c => ({ label: c.title || t('untitled'), icon: 'chat', group: t('pal_chats'), run: () => openChat(c.id) }));
+      items = q ? [...chats, ...cmds] : [...cmds, ...chats];
+      at = 0;
+      paint();
+      if (q.length >= 3) {
+        const found = await searchMessages(q);
+        if (mine !== seq) return;
+        items = [...items, ...found.map(m => ({ label: m.title || t('untitled'), sub: m.snippet, icon: 'sparkle', group: t('pal_msgs'), run: () => openMessage(m.chat_id, m.id) }))];
+        paint();
+      }
+    };
+    let timer = 0;
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(fill, 160); });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); close(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); at = Math.min(items.length - 1, at + 1); paint(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); at = Math.max(0, at - 1); paint(); }
+      else if (e.key === 'Enter' && items[at]) { e.preventDefault(); const it = items[at]; close(); it.run(); }
+    });
+    fill();
+    input.focus();
+  }
+  function slashMenu(input) {
+    const m = /^\/(\S*)$/.exec(input.value);
+    let pop = $('#slashPop');
+    if (!m) { if (pop) pop.remove(); return; }
+    const q = m[1].toLowerCase();
+    const found = commands().filter(c => c.slash && c.slash.some(s => s.toLowerCase().startsWith(q)));
+    if (!found.length) { if (pop) pop.remove(); return; }
+    if (!pop) { pop = h(`<div class="slash-pop" id="slashPop" role="listbox"></div>`); $('#composer').appendChild(pop); }
+    pop._items = found;
+    pop._at = Math.min(pop._at || 0, found.length - 1);
+    pop.innerHTML = `<div class="pal-group">${t('slash_hint')}</div>` + found.map((c, i) =>
+      `<button type="button" class="pal-item${i === pop._at ? ' on' : ''}" data-i="${i}">${ic(c.icon || 'chat', 'sm')}<span class="grow"><b>/${esc(c.slash[S.lang === 'fa' && c.slash[1] ? 1 : 0])}</b><small>${esc(c.label)}</small></span></button>`).join('');
+    $$('button', pop).forEach(b => { b.onmousedown = e => { e.preventDefault(); runSlash(input, found[Number(b.dataset.i)]); }; });
+  }
+  function runSlash(input, cmd) {
+    input.value = '';
+    input.dispatchEvent(new Event('input'));
+    const pop = $('#slashPop');
+    if (pop) pop.remove();
+    cmd.run();
   }
 
   /* ---- the terminal ---------------------------------------------------------------- */
@@ -2798,7 +3189,7 @@
     if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); toggleSide(); }
     if (mod && e.key === ',') { e.preventDefault(); go('settings'); }
     if (mod && e.key === '`') { e.preventDefault(); toggleTerminal(); }
-    if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); if (S.view !== 'chat') go('chat'); setTimeout(() => $('#chatSearch') && $('#chatSearch').focus(), 60); }
+    if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); }
   });
 
   window.addEventListener('resize', () => { movePill(); closePop(); });

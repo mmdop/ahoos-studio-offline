@@ -953,3 +953,271 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16p
 .agent-card .report > :first-child { margin-top: 0; }
 .agent-card .report > :last-child { margin-bottom: 0; }
 @media (prefers-reduced-motion: reduce) { .agent-dot, .agent-dot::before, .agent-dot::after { animation: none !important; } }
+
+/* ==== 3.3: alive (2026-11-09) ===================================================================
+   Asked: the studio felt still beside other studios. The colours stay flat; what changes is motion.
+   - the model at work is a small raining cloud (Nimbus: a rain cloud), not three dots
+   - the sidebar is on the left in both languages
+   - a sent message flies up and the answer's box unfolds
+   - the line of small print under the composer is gone
+   - the thinking modes slide, each with its colour; deep has a light of its own
+   Everything here stops under the Motion setting and under the system's reduced motion. */
+
+/* -- the rain cloud ------------------------------------------------------------------------------ */
+.rain { position: relative; display: inline-block; flex: none; width: 30px; height: 28px; color: var(--accent); }
+.rain svg { position: absolute; inset-inline-start: 0; top: 2px; width: 30px; height: 18px; fill: currentColor;
+  animation: cloud-bob 2.6s ease-in-out infinite; }
+.rain i { position: absolute; top: 18px; width: 2px; height: 6px; border-radius: 2px; background: currentColor; opacity: 0;
+  animation: rain-drop 1.05s linear infinite; }
+.rain i:nth-of-type(1) { left: 9px; animation-delay: 0s; }
+.rain i:nth-of-type(2) { left: 15px; animation-delay: .35s; }
+.rain i:nth-of-type(3) { left: 21px; animation-delay: .7s; }
+.rain.sm { width: 26px; height: 25px; }
+.rain.sm svg { width: 26px; height: 16px; top: 1px; }
+.rain.sm i { top: 16px; height: 5px; width: 1.8px; }
+.rain.sm i:nth-of-type(1) { left: 8px; }
+.rain.sm i:nth-of-type(2) { left: 13px; }
+.rain.sm i:nth-of-type(3) { left: 18px; }
+@keyframes rain-drop { 0% { transform: translateY(0); opacity: 0; } 18% { opacity: .95; } 100% { transform: translateY(10px); opacity: 0; } }
+@keyframes cloud-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.5px); } }
+.reading .rain { margin-inline-end: 2px; }
+/* While the words come: the cloud rains under them, in place of the caret. */
+.rain-tail { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: var(--muted); font-size: 12px;
+  animation: pop-up .3s var(--spring) both; }
+.content.live > :last-child::after { display: none; }
+
+/* -- the sidebar: on the left in both languages ---------------------------------------------------- */
+.app { direction: ltr; }
+.app > .side, .app > .main { direction: ltr; }
+[dir="rtl"] .app > .side, [dir="rtl"] .app > .main { direction: rtl; }
+[dir="rtl"] .app > .side { border-inline-end: 0; border-inline-start: 1px solid var(--line); }
+@media (max-width: 980px) {
+  [dir="rtl"] .app .side { inset-inline-start: auto; inset-inline-end: 0; }
+}
+
+/* -- a message sent, an answer opening --------------------------------------------------------------- */
+.msg.user.fresh { animation: none; }
+.msg.user.fresh .bubble { animation: send-fly .5s var(--spring) both; transform-origin: 100% 100%; }
+[dir="rtl"] .msg.user.fresh .bubble { transform-origin: 0 100%; }
+.msg.bot.fresh { animation: none; }
+.msg.bot.fresh .bubble { animation: unfold .55s var(--spring) .08s both; transform-origin: 50% 0; }
+@keyframes send-fly { 0% { opacity: 0; transform: translateY(26px) scale(.92); } 60% { opacity: 1; } 100% { opacity: 1; transform: none; } }
+@keyframes unfold {
+  0% { opacity: 0; transform: translateY(8px) scaleY(.6); clip-path: inset(0 0 60% 0 round 13px); }
+  100% { opacity: 1; transform: none; clip-path: inset(0 0 0 0 round 13px); } }
+.composer.sent { animation: launch .42s var(--spring); }
+@keyframes launch { 0% { transform: none; } 35% { transform: translateY(2px) scale(.992); box-shadow: 0 0 0 6px var(--accent-soft), var(--shadow); }
+  100% { transform: none; } }
+
+/* -- the small print under the composer: gone -------------------------------------------------------- */
+.composer-wrap > .foot { display: none; }
+
+/* -- the context glass: the level is moved by the page (a smooth step), the wave never stops -------- */
+.ctx .water { transition: none; }
+
+/* -- a little more life in the frame ------------------------------------------------------------------ */
+.row { transition: background var(--t-fast), transform .25s var(--spring), color var(--t-fast); }
+.row:hover { transform: translateX(2px); }
+[dir="rtl"] .row:hover { transform: translateX(-2px); }
+.row.on { box-shadow: inset 3px 0 0 var(--accent); }
+[dir="rtl"] .row.on { box-shadow: inset -3px 0 0 var(--accent); }
+.nav button { transition: background var(--t-fast), color var(--t-fast), transform .25s var(--spring); }
+.nav button:active, .row:active { transform: scale(.98); }
+.new-chat { transition: filter var(--t-fast), transform .25s var(--spring), box-shadow .25s var(--ease); }
+.new-chat:hover { transform: translateY(-1px); box-shadow: 0 6px 18px -8px var(--accent); }
+.new-chat:active { transform: scale(.98); }
+.new-chat .plus { transition: transform .35s var(--spring); }
+.new-chat:hover .plus { transform: rotate(90deg); }
+/* the reasoning while it is written: its label shimmers */
+.think.live > summary .lbl { background: linear-gradient(90deg, var(--muted) 0%, var(--ink) 45%, var(--muted) 90%);
+  background-size: 220% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.8s linear infinite; }
+@keyframes shimmer { from { background-position: 120% 0; } to { background-position: -100% 0; } }
+
+/* -- the thinking modes ------------------------------------------------------------------------------- */
+.seg.think-seg .thumb { transition: left .38s var(--spring), width .38s var(--spring), background .35s var(--ease), box-shadow .35s var(--ease); }
+.seg.think-seg button { transition: color .3s var(--ease); }
+.seg.think-seg[data-mode="off"] .thumb { background: var(--panel-3); box-shadow: none; }
+.seg.think-seg[data-mode="quick"] .thumb { background: #12a594; box-shadow: 0 2px 10px -3px #12a594; }
+.seg.think-seg[data-mode="balanced"] .thumb { background: var(--accent); box-shadow: 0 2px 10px -3px var(--accent); }
+.seg.think-seg[data-mode="quick"] button.on, .seg.think-seg[data-mode="balanced"] button.on,
+.seg.think-seg[data-mode="deep"] button.on { color: #fff; }
+.seg.think-seg[data-mode="deep"] .thumb { background: linear-gradient(110deg, #6e56ff, #2f6fed 35%, #13b7d6 60%, #8a5cff 85%, #6e56ff);
+  background-size: 260% 100%; animation: deep-flow 3.2s linear infinite, deep-glow 2.4s ease-in-out infinite; }
+.seg.think-seg[data-mode="deep"] button.on::after { content: "\2726"; margin-inline-start: 5px; font-size: 10px; display: inline-block;
+  animation: sparkle 1.6s ease-in-out infinite; }
+@keyframes deep-flow { from { background-position: 0% 0; } to { background-position: 260% 0; } }
+@keyframes deep-glow { 0%, 100% { box-shadow: 0 0 0 1px #8a7dff66, 0 3px 14px -4px #6e56ff; } 50% { box-shadow: 0 0 0 1px #6fd3ff88, 0 4px 22px -2px #2f9bed; } }
+@keyframes sparkle { 0%, 100% { transform: scale(.8) rotate(0); opacity: .7; } 50% { transform: scale(1.25) rotate(20deg); opacity: 1; } }
+/* deep, chosen: the composer carries a slow ring of the same light, and its reasoning a coloured edge */
+.composer.deep-think { border-color: transparent;
+  background: linear-gradient(var(--panel), var(--panel)) padding-box,
+              linear-gradient(110deg, #6e56ff, #2f6fed 35%, #13b7d6 60%, #8a5cff 85%, #6e56ff) border-box;
+  background-size: 100% 100%, 260% 100%; animation: deep-ring 4s linear infinite; }
+@keyframes deep-ring { from { background-position: 0 0, 0% 0; } to { background-position: 0 0, 260% 0; } }
+.think.deep { border-color: color-mix(in srgb, #6e56ff 45%, var(--line)); }
+.think.deep.live > summary .lbl { background-image: linear-gradient(90deg, #6e56ff, #13b7d6 45%, #8a5cff 90%); }
+
+/* -- an empty chat: the composer under the greeting; the first message sends it down --------------- */
+.view .composer-wrap { transition: transform .75s var(--spring); }
+.view.lifted .composer-wrap { transform: translateY(calc(-1 * var(--lift, 0px))); }
+.view.centering .scroller.is-empty .empty { padding-bottom: calc(var(--comp-h, 0px) + 28px); }
+.view.lifted .jump { display: none; }
+
+/* ==== 3.4: themes, an accent of one's own, and room for the work (2026-11-09) =====================
+   A theme is a whole set of the tokens above (data-palette on the root), dark or light underneath;
+   the accent can be changed on any of them (data-accent), its soft and ink shades mixed from it; and
+   the reading width, the text size and the density give the model's work the room a screen has. */
+
+:root[data-palette="ocean"] {
+  --bg: #070d18; --panel: #0c1424; --panel-2: #121c30; --panel-3: #18243b; --line: #1e2b44; --line-2: #2a3a58;
+  --ink: #e6edf8; --ink-2: #c3cfe3; --muted: #8494b0; --faint: #56647e; --user-bg: #101a2c; --code-bg: #060b14;
+  --accent: #4f9dff; --accent-soft: #0d2142; --accent-ink: #a9cdff; color-scheme: dark; }
+:root[data-palette="forest"] {
+  --bg: #07110c; --panel: #0c1912; --panel-2: #12231a; --panel-3: #182d22; --line: #1d3326; --line-2: #294533;
+  --ink: #e4f1e8; --ink-2: #c0d8c8; --muted: #86a593; --faint: #587463; --user-bg: #10201a; --code-bg: #050d09;
+  --accent: #3fcf8e; --accent-soft: #0e2a1c; --accent-ink: #9fe8c4; color-scheme: dark; }
+:root[data-palette="dusk"] {
+  --bg: #0c0814; --panel: #130d1e; --panel-2: #1b1429; --panel-3: #231a35; --line: #2a2040; --line-2: #392c55;
+  --ink: #ece6f8; --ink-2: #cfc4e6; --muted: #9586b3; --faint: #63587c; --user-bg: #181127; --code-bg: #08050e;
+  --accent: #a17bff; --accent-soft: #22173d; --accent-ink: #d0bcff; color-scheme: dark; }
+:root[data-palette="sand"] {
+  --bg: #f6f1e8; --panel: #fffaf2; --panel-2: #efe7da; --panel-3: #e6dccb; --line: #e0d5c2; --line-2: #cfc1a9;
+  --ink: #2a241b; --ink-2: #4a4135; --muted: #7a6e5c; --faint: #a39780; --user-bg: #f0e7d8; --code-bg: #f3ecdf;
+  --accent: #c2610f; --accent-soft: #f8e6d2; --accent-ink: #8e4708; color-scheme: light; }
+:root[data-palette="rose"] {
+  --bg: #fbf6f8; --panel: #ffffff; --panel-2: #f6edf1; --panel-3: #efe2e8; --line: #ecdfe5; --line-2: #dccbd3;
+  --ink: #2b1d24; --ink-2: #4b3841; --muted: #85707a; --faint: #ad99a2; --user-bg: #f7ecf1; --code-bg: #f8f1f4;
+  --accent: #d6336c; --accent-soft: #fbe4ec; --accent-ink: #9c1f4d; color-scheme: light; }
+
+/* the accent, on any theme */
+:root[data-accent] { --accent-soft: color-mix(in srgb, var(--accent) 16%, var(--panel)); --accent-ink: color-mix(in srgb, var(--accent) 72%, var(--ink)); }
+:root[data-accent="violet"] { --accent: #7c5cff; }
+:root[data-accent="teal"] { --accent: #12a594; }
+:root[data-accent="orange"] { --accent: #e8710a; }
+:root[data-accent="pink"] { --accent: #e5487f; }
+:root[data-accent="green"] { --accent: #2fa35b; }
+
+/* the theme picker: a small window of each theme */
+.themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; width: 100%; }
+.theme-card { display: grid; gap: 7px; padding: 8px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel-2);
+  text-align: start; font-size: 12.5px; color: var(--ink-2); transition: border-color .2s var(--ease), transform .25s var(--spring); }
+.theme-card:hover { transform: translateY(-2px); }
+.theme-card.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); color: var(--ink); font-weight: 600; }
+.theme-card .win { height: 54px; border-radius: 8px; display: grid; grid-template-columns: 26% 1fr; overflow: hidden; border: 1px solid #0000001a; }
+.theme-card .win i { display: block; }
+.theme-card .win b { display: grid; align-content: end; gap: 4px; padding: 6px; }
+.theme-card .win b s { display: block; height: 6px; border-radius: 3px; text-decoration: none; }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.swatch { width: 26px; height: 26px; border-radius: 50%; background: var(--c); border: 2px solid transparent; outline: 2px solid transparent;
+  transition: transform .2s var(--spring), outline-color .2s var(--ease); }
+.swatch:hover { transform: scale(1.12); }
+.swatch.on { outline-color: var(--c); border-color: var(--panel); }
+
+/* room for the work: reading width, text size, density */
+:root { --read-w: 790px; }
+:root[data-width="wide"] { --read-w: 1020px; }
+:root[data-width="full"] { --read-w: 1400px; }
+.thread, .composer, .sheet { max-width: var(--read-w); }
+:root[data-text="small"] body { font-size: 14px; }
+:root[data-text="large"] body { font-size: 16.5px; }
+:root[data-density="compact"] .thread { gap: 12px; padding-top: 14px; }
+:root[data-density="compact"] .msg .bubble { padding: 9px 12px; }
+:root[data-density="compact"] .msg .meta { margin-top: 6px; padding-top: 6px; }
+:root[data-density="compact"] .composer-wrap { padding: 6px 14px 8px; }
+:root[data-density="compact"] .flow:not(:empty) { margin-bottom: 8px; }
+.srow.wide-ctl { flex-wrap: wrap; }
+.srow.wide-ctl .ctl { flex: 1 1 100%; justify-content: stretch; }
+
+/* a table cell breaks between words, never inside one: the bubble's overflow-wrap:anywhere let a cell shrink
+   to a few letters and split "JavaScript" mid-word (seen on a phone, 2026-11-09) */
+.content td, .content th { overflow-wrap: break-word; word-break: normal; }
+
+/* ==== 3.5: the preview, the palette, slash commands, voice, found messages (2026-11-10) ============== */
+
+/* the live preview: a panel at the side, the page in a sandbox */
+.preview { position: fixed; inset-block: 0; right: 0; width: min(560px, 100vw); z-index: 160; display: flex; flex-direction: column;
+  background: var(--panel); border-left: 1px solid var(--line); box-shadow: var(--pop-shadow);
+  transform: translateX(105%); transition: transform .38s var(--spring); }
+.preview.on { transform: none; }
+.preview-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 14px; }
+.preview-head svg.i:first-child { color: var(--accent); }
+.preview iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+.code-acts .run { color: var(--accent-ink); font-weight: 600; }
+.code-acts .run svg { fill: currentColor; stroke: none; }
+
+/* the command palette (Ctrl+K) */
+.palette-scrim { position: fixed; inset: 0; z-index: 300; background: rgba(0, 0, 0, .35); display: grid; justify-items: center;
+  align-items: start; padding-top: 12vh; animation: fade-in .15s var(--ease) both; }
+.palette { width: min(620px, 92vw); max-height: 70vh; display: flex; flex-direction: column; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--pop-shadow); overflow: hidden; animation: pop-up .25s var(--spring) both; }
+.palette-in { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); color: var(--muted); }
+.palette-in input { flex: 1; border: 0; outline: 0; background: none; font-size: 16px; color: var(--ink); }
+.palette-list { overflow-y: auto; padding: 6px; }
+.palette-foot { padding: 7px 14px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }
+.pal-group { padding: 8px 10px 4px; font-size: 11px; font-weight: 680; color: var(--muted); }
+.pal-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 9px; text-align: start; color: var(--ink); }
+.pal-item .grow { min-width: 0; }
+.pal-item b { display: block; font-weight: 560; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pal-item small { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pal-item.on { background: var(--accent-soft); color: var(--accent-ink); }
+.pal-none { padding: 16px; text-align: center; color: var(--muted); font-size: 13px; }
+
+/* slash commands, above the composer */
+.slash-pop { position: absolute; inset-inline-start: 12px; bottom: calc(100% + 6px); width: min(320px, 90%); z-index: 40; padding: 4px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--pop-shadow); animation: pop-up .2s var(--spring) both; }
+
+/* the microphone: red while it listens, a pulse while Whisper reads */
+.mic-btn.rec { color: #fff; background: var(--bad); animation: mic-pulse 1.2s ease-out infinite; }
+.mic-btn.busy { color: var(--accent); animation: caret .9s ease-in-out infinite; }
+@keyframes mic-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--bad) 55%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
+.msg .meta button.on { color: var(--accent-ink); background: var(--accent-soft); }
+
+/* a message a search opened: it glows for a moment */
+.msg.found .bubble { box-shadow: 0 0 0 2px var(--accent), var(--shadow); transition: box-shadow .4s var(--ease); }
+.found-row .ttl b { display: block; font-weight: 560; }
+.found-row .ttl small { display: block; color: var(--muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* a question's own buttons (edit, its branches) and an answer's versions: quiet until the pointer comes */
+.msg.user .u-acts { display: flex; align-items: center; gap: 2px; margin-top: 4px; color: var(--muted); font-size: 12px;
+  opacity: 0; transition: opacity .2s var(--ease); }
+.msg.user:hover .u-acts, .msg.user .u-acts:focus-within, .msg.user .u-acts:has(.pager) { opacity: 1; }
+@media (pointer: coarse) { .msg.user .u-acts { opacity: 1; } }
+.u-acts > button, .pager button { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; color: var(--muted); }
+.u-acts > button:hover, .pager button:hover:not(:disabled) { background: var(--panel-2); color: var(--ink); }
+.pager { display: inline-flex; align-items: center; gap: 1px; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+.pager button:first-child svg { transform: rotate(90deg); }
+.pager button:last-child svg { transform: rotate(-90deg); }
+.pager button:disabled { opacity: .35; cursor: default; }
+.msg .meta .pager button { padding: 0; width: 24px; height: 24px; }
+.msg.user.editing .col { align-items: stretch; }
+.edit-box { width: min(100%, 680px); margin-inline-start: auto; display: flex; flex-direction: column; gap: 8px; padding: 10px;
+  background: var(--user-bg); border: 1px solid var(--accent); border-radius: 14px; animation: pop-up .22s var(--spring) both; }
+.edit-box textarea { width: 100%; resize: none; border: 0; outline: 0; background: none; color: var(--ink); font: inherit; line-height: 1.6; }
+.edit-row { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* projects: the picker over the chat list, the note on a new chat's page, the project's sheet */
+.proj-bar { margin: 10px 12px 0; }
+.proj-pick { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--line);
+  color: var(--ink); font-size: 13px; font-weight: 560; text-align: start; transition: border-color .2s var(--ease), background .2s var(--ease); }
+.proj-pick:hover { background: var(--panel-2); }
+.proj-pick.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+.proj-pick .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-note { display: inline-flex; align-items: center; gap: 6px; margin: -4px auto 14px; padding: 4px 12px; border-radius: 99px;
+  background: var(--accent-soft); color: var(--accent-ink); font-size: 13px; font-weight: 560; animation: pop-up .3s var(--spring) both; }
+.proj-modal { width: min(600px, 100%); }
+.proj-modal .fld { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; font-size: 13px; color: var(--muted); }
+.proj-modal textarea.input { resize: vertical; min-height: 96px; line-height: 1.6; font: inherit; color: var(--ink); }
+.proj-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.proj-files:empty { display: none; }
+.proj-files .file-chip { max-width: 100%; }
+.proj-files .file-chip small { color: var(--muted); font-variant-numeric: tabular-nums; }
+.proj-file-row { display: flex; align-items: center; gap: 10px; }
+.proj-file-row .room { color: var(--muted); font-size: 12px; }
+.proj-file-row .room.full { color: var(--bad); }
+.modal .acts .sp { flex: 1; }
+.btn.danger-text { color: var(--bad); }
+
+/* a chat's shared link */
+.share-box { display: flex; flex-direction: column; gap: 10px; }
+.share-link { font-family: var(--mono); font-size: 12.5px; }
+.share-row { display: flex; gap: 6px; flex-wrap: wrap; }

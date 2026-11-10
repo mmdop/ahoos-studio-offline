@@ -163,6 +163,34 @@ def build(controller: "Controller") -> FastAPI:
             raise bad(error, 404) from error
         return {"ok": True}
 
+    @app.post("/local/chats/{chat_id}/version")
+    async def chat_version(chat_id: str, request: Request) -> dict:
+        body = await _body(request)
+        try:
+            return controller.chats.switch_version(chat_id, str(body.get("message_id", "")), int(body.get("at", 0)))
+        except (KeyError, ValueError) as error:
+            raise bad(error, 404) from error
+
+    @app.post("/local/chats/{chat_id}/edit")
+    async def chat_edit(chat_id: str, request: Request) -> dict:
+        body = await _body(request)
+        try:
+            return {"branches": controller.chats.cut_for_edit(chat_id, str(body.get("message_id", "")))}
+        except KeyError as error:
+            raise bad(error, 404) from error
+
+    @app.post("/local/chats/{chat_id}/branch")
+    async def chat_branch(chat_id: str, request: Request) -> dict:
+        body = await _body(request)
+        try:
+            return controller.chats.switch_branch(chat_id, str(body.get("message_id", "")), int(body.get("at", 0)))
+        except (KeyError, ValueError) as error:
+            raise bad(error, 404) from error
+
+    @app.get("/local/search")
+    def search(q: str = "") -> list:
+        return controller.chats.search(q[:200])
+
     @app.delete("/local/chats/{chat_id}")
     def delete_chat(chat_id: str) -> dict:
         try:
@@ -273,11 +301,12 @@ def build(controller: "Controller") -> FastAPI:
             try:
                 history = list(chat["messages"])
                 user = None
+                before = None                      # the answer asked again: it stays, as a version
                 if retry:
                     # "Answer again": the last answer goes, the message before it stays.
                     if history and history[-1].get("role") == "assistant":
                         controller.chats.replace_last(chat["id"], "assistant")
-                        history.pop()
+                        before = history.pop()
                     if not history or history[-1].get("role") != "user":
                         emit("error", {"detail": "There is no message to answer again."})
                         return
@@ -315,9 +344,14 @@ def build(controller: "Controller") -> FastAPI:
                     resume=resume, procs=controller.procs)
                 if user is None:
                     sent = runner.sent_text(attachments)
-                    user = controller.chats.append(chat["id"], {
-                        "role": "user", "content": prompt, "sent": sent, "plan": plan, "agents": agents,
-                        "attachments": [{"name": a["name"], "chars": len(a["text"])} for a in attachments]})
+                    asked = {"role": "user", "content": prompt, "sent": sent, "plan": plan, "agents": agents,
+                             "attachments": [{"name": a["name"], "chars": len(a["text"])} for a in attachments]}
+                    branches = [b for b in (body.get("branches") or []) if isinstance(b, dict)][-7:]
+                    if branches:
+                        # An edited question: its old branches, then this one (its turns are the chat's own).
+                        asked["branches"] = branches + [{"message": {"role": "user", "content": prompt}, "tail": None}]
+                        asked["at"] = len(asked["branches"]) - 1
+                    user = controller.chats.append(chat["id"], asked)
                 else:
                     sent = user.get("sent") or user["content"]
                 emit("run", {"run_id": run_id, "chat_id": chat["id"], "user": user,
@@ -336,7 +370,9 @@ def build(controller: "Controller") -> FastAPI:
                 if crew is not None:
                     message["steps"] = [crew] + list(message.get("steps") or [])
                     message["agents"] = True
-                saved = controller.chats.append(chat["id"], message)
+                from .chats import with_version
+
+                saved = controller.chats.append(chat["id"], with_version(message, before))
                 emit("done", {"message": saved})
             finally:
                 controller.runs.pop(run_id, None)

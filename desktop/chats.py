@@ -19,6 +19,7 @@ import uuid
 from pathlib import Path
 
 MAX_CHATS = 300
+MAX_VERSIONS = 8
 _ID = re.compile(r"^[a-f0-9]{8,40}$")
 
 
@@ -112,6 +113,88 @@ class Chats:
                     return message
         raise KeyError(f"no message {message_id!r}")
 
+    # -- an answer's versions, a question's branches (2026-11-10, as the online studio keeps them) --------
+    #
+    # An answer asked again keeps the ones before it: message["versions"] holds every version (each a copy of
+    # the answer without its id) and message["at"] the one shown. An edited question keeps its old branch:
+    # message["branches"] holds {message, tail} for each, the shown one with tail None (its turns are the
+    # chat's own).
+
+    def switch_version(self, chat_id: str, message_id: str, at: int) -> dict:
+        with self._lock:
+            chat = self.get(chat_id)
+            for i, message in enumerate(chat["messages"]):
+                if message.get("id") == message_id:
+                    versions = message.get("versions") or []
+                    if not 0 <= at < len(versions):
+                        raise KeyError(f"no version {at}")
+                    shown = dict(versions[at])
+                    shown.update(id=message_id, versions=versions, at=at)
+                    chat["messages"][i] = shown
+                    self._save(chat)
+                    return shown
+        raise KeyError(f"no message {message_id!r}")
+
+    def cut_for_edit(self, chat_id: str, message_id: str) -> list:
+        """The question and what followed it become a branch; the chat ends before it. Returns the branches."""
+        with self._lock:
+            chat = self.get(chat_id)
+            messages = chat["messages"]
+            i = next((n for n, m in enumerate(messages) if m.get("id") == message_id and m.get("role") == "user"), None)
+            if i is None:
+                raise KeyError(f"no message {message_id!r}")
+            asked = messages[i]
+            branches = list(asked.get("branches") or [None])
+            branches[asked.get("at", 0) if asked.get("at", 0) < len(branches) else 0] = {"message": bare(asked), "tail": messages[i + 1:]}
+            chat["messages"] = messages[:i]
+            chat["updated"] = time.time()
+            self._save(chat)
+            return branches[-(MAX_VERSIONS - 1):]
+
+    def switch_branch(self, chat_id: str, message_id: str, at: int) -> dict:
+        with self._lock:
+            chat = self.get(chat_id)
+            messages = chat["messages"]
+            i = next((n for n, m in enumerate(messages) if m.get("id") == message_id and m.get("role") == "user"), None)
+            if i is None:
+                raise KeyError(f"no message {message_id!r}")
+            asked = messages[i]
+            branches = list(asked.get("branches") or [])
+            if not 0 <= at < len(branches):
+                raise KeyError(f"no branch {at}")
+            branches[asked.get("at", 0)] = {"message": bare(asked), "tail": messages[i + 1:]}
+            target = branches[at]
+            branches[at] = {"message": target["message"], "tail": None}
+            shown = dict(target["message"])
+            shown.update(id=uuid.uuid4().hex[:12], branches=branches, at=at)
+            chat["messages"] = messages[:i] + [shown] + list(target.get("tail") or [])
+            chat["updated"] = time.time()
+            self._save(chat)
+            return chat
+
+    def search(self, query: str, limit: int = 20) -> list[dict]:
+        """Messages whose text holds the query, newest chats first: {chat_id, id, title, snippet}."""
+        needle = query.strip().lower()
+        if len(needle) < 3:
+            return []
+        found = []
+        for row in self.listing():
+            try:
+                chat = self.get(row["id"])
+            except KeyError:
+                continue
+            for message in reversed(chat.get("messages") or []):
+                text = str(message.get("content") or "")
+                at = text.lower().find(needle)
+                if at < 0:
+                    continue
+                start = max(0, at - 40)
+                snippet = ("…" if start else "") + " ".join(text[start:start + 120].split()) + "…"
+                found.append({"chat_id": chat["id"], "id": message.get("id"), "title": chat.get("title") or "", "snippet": snippet})
+                if len(found) >= limit:
+                    return found
+        return found
+
     def delete(self, chat_id: str) -> None:
         with self._lock:
             self._path(chat_id).unlink(missing_ok=True)
@@ -142,6 +225,22 @@ class Chats:
             if chat["messages"]:
                 self._save(chat)
         (self.root / ".imported").write_text("2.0 conversations were imported from ../studio\n", encoding="utf-8")
+
+
+def bare(message: dict) -> dict:
+    """A message without its id and its own versions or branches: what a version or a branch keeps."""
+    return {k: v for k, v in message.items() if k not in ("id", "versions", "branches", "at")}
+
+
+def with_version(message: dict, before: dict | None) -> dict:
+    """A new answer to a question asked again: the answers before it become its versions."""
+    if before is None:
+        return message
+    versions = list(before.get("versions") or [bare(before)])[-(MAX_VERSIONS - 1):]
+    versions.append(bare(message))
+    message["versions"] = versions
+    message["at"] = len(versions) - 1
+    return message
 
 
 def title_for(text: str) -> str:
